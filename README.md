@@ -46,11 +46,7 @@ The band appears on its own whenever the session's branch belongs to a Graphite 
 
 ## Settings
 
-| Setting | Values | Default |
-|---|---|---|
-| `prLinks` | `github` or `graphite`: where clicking a PR title opens it | `github` |
-
-Claude Code asks for it when you install the plugin. To change it later, use `/config` in a terminal session.
+Pick where clicking a PR title opens it with the **Links** picker in the band's header: GitHub (default) or Graphite. The choice is remembered across sessions.
 
 ## License
 

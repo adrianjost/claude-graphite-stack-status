@@ -16,17 +16,5 @@
     "pull-requests",
     "ci"
   ],
-  "types": "./types/index.d.ts",
-  "userConfig": {
-    "prLinks": {
-      "type": "string",
-      "title": "PR links",
-      "description": "Where clicking a PR title opens it",
-      "default": "github",
-      "options": [
-        "github",
-        "graphite"
-      ]
-    }
-  }
+  "types": "./types/index.d.ts"
 }

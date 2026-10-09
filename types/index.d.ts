@@ -1,3 +1,5 @@
+export type LinkTarget = 'github' | 'graphite'
+
 export type CiState = 'pass' | 'fail' | 'pending' | 'none'
 
 export type PrInfo = {
@@ -45,6 +47,6 @@ export type StackSnapshot = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'graphite-stack': { snapshot: StackSnapshot; isHidden: boolean }
+    'graphite-stack': { snapshot: StackSnapshot; isHidden: boolean; linkTarget: LinkTarget }
   }
 }

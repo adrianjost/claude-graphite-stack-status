@@ -1,12 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface as Engine, Register } from 'claude-code'
 
-import type { CiState, Lane, PrInfo, StackRow, StackSnapshot } from '../types'
+import type { CiState, Lane, LinkTarget, PrInfo, StackRow, StackSnapshot } from '../types'
 
 const POLL_MS = 60_000
 const EMPTY: StackSnapshot = { branch: '', rows: [], columns: 1, updatedAt: 0, isLoading: false }
 const snapshot = atom({ plugin: 'graphite-stack', key: 'snapshot' } as const, EMPTY)
 const isHidden = atom({ plugin: 'graphite-stack', key: 'isHidden' } as const, false)
+const linkTarget = atom({ plugin: 'graphite-stack', key: 'linkTarget' } as const, 'github' as LinkTarget)
 
 type MetaRow = { branch_name: string; parent_branch_name: string | null; children: string | null }
 
@@ -453,11 +454,12 @@ function graphiteUrl(pr: PrInfo) {
   return owner && repo ? `https://app.graphite.com/github/pr/${owner}/${repo}/${pr.number}` : pr.url
 }
 
-export const register: Register = (on, options) => {
-  const prUrl = (pr: PrInfo) => (options.prLinks === 'graphite' ? graphiteUrl(pr) : pr.url)
+export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    const stored = await $.store.get('linkTarget')
+    if (stored === 'github' || stored === 'graphite') await update($, linkTarget, () => stored)
     await $.command.register({
       name: 'stack',
       description: 'Show or hide the Graphite stack above the prompt',
@@ -489,8 +491,10 @@ export const register: Register = (on, options) => {
     if (e.surface !== 'desktop') return next(e)
     const elements = $.ui.resolve(e)
     if (!('Svg' in elements)) return next(e)
-    const { Box, Text, Button, Link, Svg } = elements
+    const { Box, Text, Button, Link, Svg, Select } = elements
 
+    const links = await read($, linkTarget)
+    const prUrl = (pr: PrInfo) => (links === 'graphite' ? graphiteUrl(pr) : pr.url)
     const prs = s.rows.filter(row => row.pr)
     const failing = prs.filter(row => row.pr?.ci === 'fail').length
     const diffChars = Math.max(
@@ -510,6 +514,20 @@ export const register: Register = (on, options) => {
           <Text bold>Graphite stack</Text>
           <Text dimColor>{summary}</Text>
           <Box flexGrow={1} />
+          <Select
+            key="links"
+            label="Links"
+            value={links}
+            options={[
+              { value: 'github', label: 'GitHub' },
+              { value: 'graphite', label: 'Graphite' },
+            ]}
+            onSelect={value => {
+              const target: LinkTarget = value === 'graphite' ? 'graphite' : 'github'
+              void update($, linkTarget, () => target)
+              void $.store.set('linkTarget', target)
+            }}
+          />
           <Button key="refresh" plain dimColor hotkey="r" label="Refresh" onPress={() => void refresh($)} />
           <Button key="hide" plain dimColor hotkey="h" label="Hide" onPress={() => void update($, isHidden, () => true)} />
         </Box>
