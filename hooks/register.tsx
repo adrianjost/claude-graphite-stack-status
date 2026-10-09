@@ -89,7 +89,7 @@ async function diffStat($: Engine, cwd: string, parent: string, branch: string) 
     added += Number(a) || 0
     removed += Number(r) || 0
   }
-  return { added, removed }
+  return added || removed ? { added, removed } : undefined
 }
 
 async function loadPr($: Engine, cwd: string, branch: string): Promise<PrInfo | undefined> {
@@ -498,7 +498,7 @@ export const register: Register = on => {
                   </Box>
                 )}
               </Box>
-              <Box flexGrow={1} flexShrink={1}>
+              <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
                 {pr ? (
                   <Link href={pr.url}><Text wrap="truncate-end">{pr.title}</Text></Link>
                 ) : (
@@ -506,19 +506,21 @@ export const register: Register = on => {
                 )}
               </Box>
               {row.needsRestack && (
-                <Button
-                  key={`restack-${row.branch}`}
-                  plain
-                  label="↻ restack"
-                  onPress={() =>
-                    void $.prompt.submit({
-                      text:
-                        `Restack the Graphite branch \`${row.branch}\` onto its parent \`${row.parent ?? 'trunk'}\` ` +
-                        '(check it out, run `gt restack`, resolve any conflicts), then switch back to the branch I was on.',
-                      asUser: true,
-                    })
-                  }
-                />
+                <Box flexShrink={0}>
+                  <Button
+                    key={`restack-${row.branch}`}
+                    plain
+                    label="↻ restack"
+                    onPress={() =>
+                      void $.prompt.submit({
+                        text:
+                          `Restack the Graphite branch \`${row.branch}\` onto its parent \`${row.parent ?? 'trunk'}\` ` +
+                          '(check it out, run `gt restack`, resolve any conflicts), then switch back to the branch I was on.',
+                        asUser: true,
+                      })
+                    }
+                  />
+                </Box>
               )}
               {pr && pr.labels.length > 0 && (
                 <Box flexDirection="row" alignItems="center" gap={1} flexShrink={0}>
@@ -530,7 +532,11 @@ export const register: Register = on => {
               )}
               {diffChars > 0 && (() => {
                 const stat = diffSvg(row.isTrunk ? undefined : row.diff, diffChars)
-                return <Svg source={stat.source} alt={stat.alt} width={stat.width} height={ROW} />
+                return (
+                  <Box flexShrink={0}>
+                    <Svg source={stat.source} alt={stat.alt} width={stat.width} height={ROW} />
+                  </Box>
+                )
               })()}
             </Box>
           )
