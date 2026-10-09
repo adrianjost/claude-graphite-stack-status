@@ -15,7 +15,7 @@ One row per branch, drawn as the same tree `gt log` draws, from the branch above
 | **Review icon** | ✓ approved, 💬 changes requested, 👤+ no reviewers yet, 🕐 waiting for review |
 | **Small number** | unresolved review conversations |
 | **↻ restack** | the branch is no longer based on its parent's head; click it to have Claude restack it |
-| **Badges** | the PR's GitHub labels, in their colors |
+| **Badges** | the PR's GitHub labels, in their colors; when they don't fit, `+N` shows the rest on hover |
 | **+12 −3** | lines added and removed against the parent branch, ignoring whitespace |
 
 The title links to the PR. The band refreshes every minute and after Claude runs `git`, `gh` or `gt`. When any PR fails CI, the status line says so.

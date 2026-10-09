@@ -386,19 +386,65 @@ function laneSvg(lane: Lane, columns: number, color?: string) {
 }
 
 function pillSvg(label: { name: string; color: string }) {
-  const font = 11
-  const width = Math.ceil(label.name.length * font * 0.6 + 14)
-  const height = 18
-  const [r, g, b] = [0, 2, 4].map(i => parseInt(label.color.slice(i, i + 2), 16) || 0)
-  const ink = (0.299 * (r ?? 0) + 0.587 * (g ?? 0) + 0.114 * (b ?? 0)) > 150 ? '#1f2328' : '#ffffff'
+  const pill = pillParts(label.name, `#${label.color}`, labelInk(label.color), 0, 0)
   return {
-    source:
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
-      `<rect width="${width}" height="${height}" rx="${height / 2}" fill="#${label.color}"/>` +
-      `<text x="${width / 2}" y="${height / 2}" dy="0.35em" text-anchor="middle" font-size="${font}" ` +
-      `font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="${ink}">${esc(label.name)}</text></svg>`,
+    source: `<svg xmlns="http://www.w3.org/2000/svg" width="${pill.width}" height="18" viewBox="0 0 ${pill.width} 18">${pill.body}</svg>`,
+    width: pill.width,
+    height: 18,
+  }
+}
+
+const LABELS_MAX = 160
+const PILL_GAP = 4
+
+function pillParts(name: string, fill: string, ink: string, x: number, y: number, fillOpacity = 1) {
+  const font = 11
+  const width = Math.ceil(name.length * font * 0.6 + 14)
+  const height = 18
+  return {
     width,
-    height,
+    body:
+      `<rect x="${x}" y="${y}" width="${width}" height="${height}" rx="${height / 2}" fill="${fill}" fill-opacity="${fillOpacity}"/>` +
+      `<text x="${x + width / 2}" y="${y + height / 2}" dy="0.35em" text-anchor="middle" font-size="${font}" ` +
+      `font-family="${MONO}" fill="${ink}">${esc(name)}</text>`,
+  }
+}
+
+function labelInk(color: string) {
+  const [r, g, b] = [0, 2, 4].map(i => parseInt(color.slice(i, i + 2), 16) || 0)
+  return 0.299 * (r ?? 0) + 0.587 * (g ?? 0) + 0.114 * (b ?? 0) > 150 ? '#1f2328' : '#ffffff'
+}
+
+function labelsSvg(labels: PrInfo['labels']) {
+  const widthOf = (name: string) => pillParts(name, '', '', 0, 0).width
+  const total = (names: string[]) => names.reduce((sum, name) => sum + widthOf(name), 0) + Math.max(0, names.length - 1) * PILL_GAP
+  let shown = labels
+  if (total(labels.map(l => l.name)) > LABELS_MAX) {
+    const more = `+${labels.length}`
+    shown = []
+    for (const label of labels) {
+      if (total([...shown, label].map(l => l.name).concat(more)) <= LABELS_MAX) shown = [...shown, label]
+    }
+  }
+  const hidden = labels.length - shown.length
+  const y = (ROW - 18) / 2
+  const parts: string[] = []
+  let x = 0
+  for (const label of shown) {
+    const pill = pillParts(label.name, `#${label.color}`, labelInk(label.color), x, y)
+    parts.push(pill.body)
+    x += pill.width + PILL_GAP
+  }
+  if (hidden) {
+    const pill = pillParts(`+${hidden}`, LINE, LINE, x, y, 0.22)
+    parts.push(pill.body)
+    x += pill.width + PILL_GAP
+  }
+  const width = Math.max(0, x - PILL_GAP)
+  return {
+    width,
+    hidden,
+    source: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${ROW}" viewBox="0 0 ${width} ${ROW}">${parts.join('')}</svg>`,
   }
 }
 
@@ -522,14 +568,31 @@ export const register: Register = on => {
                   />
                 </Box>
               )}
-              {pr && pr.labels.length > 0 && (
-                <Box flexDirection="row" alignItems="center" gap={1} flexShrink={0}>
-                  {pr.labels.map(label => {
-                    const pill = pillSvg(label)
-                    return <Svg source={pill.source} alt={label.name} width={pill.width} height={pill.height} />
-                  })}
-                </Box>
-              )}
+              {pr && pr.labels.length > 0 && (() => {
+                const labels = labelsSvg(pr.labels)
+                return (
+                  <Box key={`labels-${row.branch}`} flexShrink={0}>
+                    <Svg source={labels.source} alt={pr.labels.map(l => l.name).join(', ')} width={labels.width} height={ROW} />
+                    {labels.hidden > 0 && (
+                      <Box
+                        position="absolute"
+                        top={1}
+                        right={0}
+                        display="none"
+                        hover={{ display: 'flex' }}
+                        flexDirection="column"
+                        paddingX={1}
+                      >
+                        <Text dimColor>{pr.labels.length} labels</Text>
+                        {pr.labels.map(label => {
+                          const pill = pillSvg(label)
+                          return <Svg source={pill.source} alt={label.name} width={pill.width} height={pill.height} />
+                        })}
+                      </Box>
+                    )}
+                  </Box>
+                )
+              })()}
               {diffChars > 0 && (() => {
                 const stat = diffSvg(row.isTrunk ? undefined : row.diff, diffChars)
                 return (
