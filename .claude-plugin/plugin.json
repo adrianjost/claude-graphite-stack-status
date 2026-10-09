@@ -2,10 +2,31 @@
   "name": "graphite-stack",
   "version": "1.2.0",
   "description": "Shows the Graphite stack of your current branch above the Claude Code prompt: stack tree, PR state, review status, open conversations, failing CI and labels.",
-  "author": { "name": "Adrian Jost", "url": "https://github.com/adrianjost" },
+  "author": {
+    "name": "Adrian Jost",
+    "url": "https://github.com/adrianjost"
+  },
   "homepage": "https://github.com/adrianjost/claude-graphite-stack-status",
   "repository": "https://github.com/adrianjost/claude-graphite-stack-status",
   "license": "MIT",
-  "keywords": ["graphite", "stacked-prs", "github", "pull-requests", "ci"],
-  "types": "./types/index.d.ts"
+  "keywords": [
+    "graphite",
+    "stacked-prs",
+    "github",
+    "pull-requests",
+    "ci"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "prLinks": {
+      "type": "string",
+      "title": "PR links",
+      "description": "Where clicking a PR title opens it",
+      "default": "github",
+      "options": [
+        "github",
+        "graphite"
+      ]
+    }
+  }
 }

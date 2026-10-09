@@ -44,6 +44,14 @@ The band appears on its own whenever the session's branch belongs to a Graphite 
 - `/stack` shows or hides it
 - click the band, then press `R` to refresh or `H` to hide
 
+## Settings
+
+| Setting | Values | Default |
+|---|---|---|
+| `prLinks` | `github` or `graphite`: where clicking a PR title opens it | `github` |
+
+Claude Code asks for it when you install the plugin. To change it later, use `/config` in a terminal session.
+
 ## License
 
 MIT

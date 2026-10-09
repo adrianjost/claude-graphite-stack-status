@@ -448,7 +448,14 @@ function labelsSvg(labels: PrInfo['labels']) {
   }
 }
 
-export const register: Register = on => {
+function graphiteUrl(pr: PrInfo) {
+  const [, owner, repo] = pr.url.match(/github\.com\/([^/]+)\/([^/]+)\//) ?? []
+  return owner && repo ? `https://app.graphite.com/github/pr/${owner}/${repo}/${pr.number}` : pr.url
+}
+
+export const register: Register = (on, options) => {
+  const prUrl = (pr: PrInfo) => (options.prLinks === 'graphite' ? graphiteUrl(pr) : pr.url)
+
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     await $.command.register({
@@ -546,7 +553,7 @@ export const register: Register = on => {
               </Box>
               <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
                 {pr ? (
-                  <Link href={pr.url}><Text wrap="truncate-end">{pr.title}</Text></Link>
+                  <Link href={prUrl(pr)}><Text wrap="truncate-end">{pr.title}</Text></Link>
                 ) : (
                   <Text dimColor italic={!row.isTrunk} wrap="truncate-end">{row.branch}</Text>
                 )}
