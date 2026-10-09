@@ -79,6 +79,19 @@ function latestChecks(checks: GhCheck[]) {
   return [...latest.values()]
 }
 
+async function diffStat($: Engine, cwd: string, parent: string, branch: string) {
+  const out = await run($, cwd, ['git', 'diff', '-w', '--numstat', `${parent}...${branch}`])
+  if (out === undefined) return undefined
+  let added = 0
+  let removed = 0
+  for (const line of out.split('\n')) {
+    const [a, r] = line.split('\t')
+    added += Number(a) || 0
+    removed += Number(r) || 0
+  }
+  return { added, removed }
+}
+
 async function loadPr($: Engine, cwd: string, branch: string): Promise<PrInfo | undefined> {
   const out = await run($, cwd, [
     'gh', 'pr', 'view', branch,
@@ -196,15 +209,16 @@ async function refresh($: Engine) {
       built.rows.map(async row => {
         if (row.isTrunk) return row
         const parent = row.parent
-        const [pr, isAncestor] = await Promise.all([
+        const [pr, isAncestor, diff] = await Promise.all([
           loadPr($, cwd, row.branch).catch(() => undefined),
           parent
             ? $.process
                 .run(['git', 'merge-base', '--is-ancestor', parent, row.branch], { cwd })
                 .then(r => r.exitCode === 0)
             : Promise.resolve(true),
+          parent ? diffStat($, cwd, parent, row.branch) : Promise.resolve(undefined),
         ])
-        return { ...row, pr, needsRestack: !isAncestor }
+        return { ...row, pr, diff, needsRestack: !isAncestor }
       }),
     )
 
@@ -323,6 +337,24 @@ function metaSvg(layout: MetaLayout, pr?: PrInfo) {
   }
 }
 
+const DIFF_FONT = 11
+const DIFF_CHAR = DIFF_FONT * 0.6
+
+const diffText = (diff: { added: number; removed: number }) => [`+${diff.added}`, `−${diff.removed}`] as const
+
+function diffSvg(diff: { added: number; removed: number } | undefined, chars: number) {
+  const width = Math.ceil(chars * DIFF_CHAR) + 2
+  const body = diff
+    ? `<text x="${width}" y="${ROW / 2}" dy="0.35em" text-anchor="end" font-size="${DIFF_FONT}" font-family="${MONO}">` +
+      `<tspan fill="${DOT.open}">${diffText(diff)[0]}</tspan><tspan fill="${DOT.closed}" dx="${DIFF_CHAR}">${diffText(diff)[1]}</tspan></text>`
+    : ''
+  return {
+    width,
+    alt: diff ? `${diff.added} lines added, ${diff.removed} removed` : 'no changes',
+    source: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${ROW}" viewBox="0 0 ${width} ${ROW}">${body}</svg>`,
+  }
+}
+
 const esc = (text: string) =>
   text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
@@ -408,6 +440,10 @@ export const register: Register = on => {
 
     const prs = s.rows.filter(row => row.pr)
     const failing = prs.filter(row => row.pr?.ci === 'fail').length
+    const diffChars = Math.max(
+      0,
+      ...s.rows.map(row => (row.diff ? diffText(row.diff).join(' ').length : 0)),
+    )
     const layout = metaLayout(prs.flatMap(row => (row.pr ? [row.pr] : [])))
     const summary = [
       `${prs.length} PR${prs.length === 1 ? '' : 's'}`,
@@ -492,6 +528,10 @@ export const register: Register = on => {
                   })}
                 </Box>
               )}
+              {diffChars > 0 && (() => {
+                const stat = diffSvg(row.isTrunk ? undefined : row.diff, diffChars)
+                return <Svg source={stat.source} alt={stat.alt} width={stat.width} height={ROW} />
+              })()}
             </Box>
           )
         })}

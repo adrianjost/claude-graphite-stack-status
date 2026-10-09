@@ -31,6 +31,7 @@ export type StackRow = {
   isTrunk: boolean
   needsRestack: boolean
   pr?: PrInfo
+  diff?: { added: number; removed: number }
 }
 
 export type StackSnapshot = {
