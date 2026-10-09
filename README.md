@@ -1,4 +1,4 @@
-# graphite-stack
+# Claude Graphite Stack Status
 
 A Claude Code plugin that shows the [Graphite](https://graphite.dev) stack of the branch Claude is working on, right above the prompt in the Claude Code desktop app.
 
@@ -24,7 +24,7 @@ The title links to the PR. The band refreshes every minute and after Claude runs
 In Claude Code, run:
 
 ```
-/plugin install graphite-stack --marketplace adrianjost/graphite-stack
+/plugin install graphite-stack --marketplace adrianjost/Claude-Graphite-Stack-Status
 ```
 
 Answer `y` to add the marketplace, then pick a scope.
