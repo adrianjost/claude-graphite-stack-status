@@ -20,6 +20,7 @@ type GhCheck = {
   detailsUrl?: string
   targetUrl?: string
   workflowName?: string
+  startedAt?: string
 }
 
 type GhPr = {
@@ -68,6 +69,16 @@ async function countOpenThreads($: Engine, cwd: string, url: string, number: num
   return data.data?.repository?.pullRequest?.reviewThreads?.nodes.filter(t => !t.isResolved).length ?? 0
 }
 
+function latestChecks(checks: GhCheck[]) {
+  const latest = new Map<string, GhCheck>()
+  for (const check of checks) {
+    const key = `${check.workflowName ?? ''}/${check.name ?? check.context ?? ''}`
+    const seen = latest.get(key)
+    if (!seen || (check.startedAt ?? '') >= (seen.startedAt ?? '')) latest.set(key, check)
+  }
+  return [...latest.values()]
+}
+
 async function loadPr($: Engine, cwd: string, branch: string): Promise<PrInfo | undefined> {
   const out = await run($, cwd, [
     'gh', 'pr', 'view', branch,
@@ -78,7 +89,7 @@ async function loadPr($: Engine, cwd: string, branch: string): Promise<PrInfo | 
   const openThreads = await countOpenThreads($, cwd, pr.url, pr.number)
   const ciCounts = { pass: 0, fail: 0, pending: 0 }
   const failing: PrInfo['failing'] = []
-  for (const check of pr.statusCheckRollup ?? []) {
+  for (const check of latestChecks(pr.statusCheckRollup ?? [])) {
     const state = checkState(check)
     ciCounts[state === 'none' ? 'pass' : state]++
     if (state === 'fail') {
