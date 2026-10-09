@@ -2,6 +2,8 @@
 
 A Claude Code plugin that shows the [Graphite](https://graphite.dev) stack of the branch Claude is working on, right above the prompt in the Claude Code desktop app.
 
+<img width="935" alt="The graphite-stack band above the Claude Code prompt, showing a stack of six PRs with their state, review status, failing CI and labels" src="https://github.com/user-attachments/assets/b3b49b33-2cc8-47bf-8504-5210b60d0cdb" />
+
 ## What it shows
 
 One row per branch, drawn as the same tree `gt log` draws, from the branch above trunk up to every descendant, side branches included.
