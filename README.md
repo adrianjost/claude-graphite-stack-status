@@ -24,7 +24,7 @@ The title links to the PR. The band refreshes every minute and after Claude runs
 In Claude Code, run:
 
 ```
-/plugin install graphite-stack --marketplace adrianjost/Claude-Graphite-Stack-Status
+/plugin install graphite-stack --marketplace adrianjost/claude-graphite-stack-status
 ```
 
 Answer `y` to add the marketplace, then pick a scope.
