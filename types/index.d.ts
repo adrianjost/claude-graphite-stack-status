@@ -1,0 +1,49 @@
+export type CiState = 'pass' | 'fail' | 'pending' | 'none'
+
+export type PrInfo = {
+  number: number
+  title: string
+  url: string
+  state: string
+  isDraft: boolean
+  reviewDecision: string
+  labels: { name: string; color: string }[]
+  ci: CiState
+  ciCounts: { pass: number; fail: number; pending: number }
+  failing: { name: string; workflow?: string; url?: string }[]
+  openThreads: number
+  hasReviewers: boolean
+}
+
+export type Lane = {
+  col: number
+  up: boolean
+  down: boolean
+  pipes: number[]
+  corners: number[]
+}
+
+export type StackRow = {
+  branch: string
+  parent?: string
+  lane: Lane
+  isCurrent: boolean
+  isTrunk: boolean
+  needsRestack: boolean
+  pr?: PrInfo
+}
+
+export type StackSnapshot = {
+  branch: string
+  rows: StackRow[]
+  columns: number
+  error?: string
+  updatedAt: number
+  isLoading: boolean
+}
+
+declare module 'claude-code' {
+  interface PluginState {
+    'graphite-stack': { snapshot: StackSnapshot; isHidden: boolean }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "adrianjost",
+  "description": "Claude Code plugins by Adrian Jost",
+  "owner": {
+    "name": "Adrian Jost",
+    "url": "https://github.com/adrianjost"
+  },
+  "plugins": [
+    {
+      "name": "graphite-stack",
+      "source": "./",
+      "description": "Graphite stack status above the Claude Code prompt: stack tree, PR state, reviews, CI and labels."
+    }
+  ]
+}
