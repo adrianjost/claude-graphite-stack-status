@@ -469,7 +469,21 @@ export const register: Register = on => {
                   <Text dimColor italic={!row.isTrunk} wrap="truncate-end">{row.branch}</Text>
                 )}
               </Box>
-              {row.needsRestack && <Text color="warning">↻ restack</Text>}
+              {row.needsRestack && (
+                <Button
+                  key={`restack-${row.branch}`}
+                  plain
+                  label="↻ restack"
+                  onPress={() =>
+                    void $.prompt.submit({
+                      text:
+                        `Restack the Graphite branch \`${row.branch}\` onto its parent \`${row.parent ?? 'trunk'}\` ` +
+                        '(check it out, run `gt restack`, resolve any conflicts), then switch back to the branch I was on.',
+                      asUser: true,
+                    })
+                  }
+                />
+              )}
               {pr && pr.labels.length > 0 && (
                 <Box flexDirection="row" alignItems="center" gap={1} flexShrink={0}>
                   {pr.labels.map(label => {

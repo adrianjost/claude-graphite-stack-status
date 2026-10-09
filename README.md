@@ -14,7 +14,7 @@ One row per branch, drawn as the same tree `gt log` draws, from the branch above
 | **Red ✕** | CI is failing. Hover it for the failing checks, each linked to its run |
 | **Review icon** | ✓ approved, 💬 changes requested, 👤+ no reviewers yet, 🕐 waiting for review |
 | **Small number** | unresolved review conversations |
-| **↻ restack** | the branch is no longer based on its parent's head |
+| **↻ restack** | the branch is no longer based on its parent's head; click it to have Claude restack it |
 | **Badges** | the PR's GitHub labels, in their colors |
 
 The title links to the PR. The band refreshes every minute and after Claude runs `git`, `gh` or `gt`. When any PR fails CI, the status line says so.
