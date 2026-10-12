@@ -63,7 +63,7 @@ async function countOpenThreads($: Engine, cwd: string, url: string, number: num
     '-F', `owner=${owner}`, '-F', `repo=${repo}`, '-F', `number=${number}`,
     '-f', 'query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved}}}}}',
   ])
-  if (!out) return 0
+  if (!out) throw new GitHubError('review threads unavailable')
   const data = JSON.parse(out) as {
     data?: { repository?: { pullRequest?: { reviewThreads?: { nodes: { isResolved: boolean }[] } } } }
   }
@@ -93,13 +93,18 @@ async function diffStat($: Engine, cwd: string, parent: string, branch: string) 
   return added || removed ? { added, removed } : undefined
 }
 
+class GitHubError extends Error {}
+
 async function loadPr($: Engine, cwd: string, branch: string): Promise<PrInfo | undefined> {
-  const out = await run($, cwd, [
-    'gh', 'pr', 'view', branch,
-    '--json', 'number,title,url,state,isDraft,reviewDecision,labels,statusCheckRollup,reviewRequests,latestReviews',
-  ])
-  if (!out) return undefined
-  const pr = JSON.parse(out) as GhPr
+  const result = await $.process.run(
+    ['gh', 'pr', 'view', branch, '--json', 'number,title,url,state,isDraft,reviewDecision,labels,statusCheckRollup,reviewRequests,latestReviews'],
+    { cwd, timeoutMs: 30_000 },
+  )
+  if (result.exitCode !== 0) {
+    if (/no pull requests found/i.test(result.stderr)) return undefined
+    throw new GitHubError(result.stderr.trim())
+  }
+  const pr = JSON.parse(result.stdout) as GhPr
   const openThreads = await countOpenThreads($, cwd, pr.url, pr.number)
   const ciCounts = { pass: 0, fail: 0, pending: 0 }
   const failing: PrInfo['failing'] = []
@@ -206,12 +211,17 @@ async function refresh($: Engine) {
       return
     }
 
+    const previous = new Map((await read($, snapshot)).rows.map(row => [row.branch, row.pr]))
+    let isStale = false
     const rows = await Promise.all(
       built.rows.map(async row => {
         if (row.isTrunk) return row
         const parent = row.parent
         const [pr, isAncestor, diff] = await Promise.all([
-          loadPr($, cwd, row.branch).catch(() => undefined),
+          loadPr($, cwd, row.branch).catch(() => {
+            isStale = true
+            return previous.get(row.branch)
+          }),
           parent
             ? $.process
                 .run(['git', 'merge-base', '--is-ancestor', parent, row.branch], { cwd })
@@ -223,7 +233,14 @@ async function refresh($: Engine) {
       }),
     )
 
-    await update($, snapshot, () => ({ branch, rows, columns: built.columns, updatedAt: Date.now(), isLoading: false }))
+    await update($, snapshot, s => ({
+      branch,
+      rows,
+      columns: built.columns,
+      updatedAt: isStale ? s.updatedAt : Date.now(),
+      isStale,
+      isLoading: false,
+    }))
     const failing = rows.filter(r => r.pr?.ci === 'fail').length
     $.ui.status(failing ? `stack: ${failing} PR${failing > 1 ? 's' : ''} failing CI` : undefined)
   } catch (error) {
@@ -506,6 +523,7 @@ export const register: Register = on => {
       `${prs.length} PR${prs.length === 1 ? '' : 's'}`,
       failing ? `${failing} failing` : '',
       s.isLoading ? 'refreshing…' : '',
+      s.isStale ? `GitHub unreachable · data from ${s.updatedAt ? new Date(s.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'never'}` : '',
     ].filter(Boolean).join(' · ')
 
     return (

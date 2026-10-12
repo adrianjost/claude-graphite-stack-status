@@ -42,6 +42,7 @@ export type StackSnapshot = {
   columns: number
   error?: string
   updatedAt: number
+  isStale?: boolean
   isLoading: boolean
 }
 
