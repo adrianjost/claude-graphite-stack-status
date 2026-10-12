@@ -3,7 +3,7 @@ export type LinkTarget = 'github' | 'graphite'
 export type DiffView = {
   title: string
   url?: string
-  files: { path: string; added: number; removed: number; hunks: string; isTooLarge: boolean; isBinary: boolean }[]
+  files: { path: string; added: number; removed: number; hunks: string; isTooLarge: boolean; isBinary: boolean; isNew: boolean }[]
   isLoading: boolean
   error?: string
 }

@@ -168,6 +168,17 @@ async function loadPrs($: Engine, cwd: string, branches: string[]) {
   return prs
 }
 
+const LANGUAGES: Record<string, string> = {
+  ts: 'typescript', tsx: 'tsx', mts: 'typescript', cts: 'typescript',
+  js: 'javascript', jsx: 'jsx', mjs: 'javascript', cjs: 'javascript',
+  json: 'json', md: 'markdown', css: 'css', scss: 'scss', html: 'html', svg: 'xml', xml: 'xml',
+  py: 'python', go: 'go', rs: 'rust', rb: 'ruby', java: 'java', kt: 'kotlin', swift: 'swift',
+  sql: 'sql', sh: 'bash', bash: 'bash', zsh: 'bash', yml: 'yaml', yaml: 'yaml', toml: 'toml',
+  graphql: 'graphql', gql: 'graphql', vue: 'vue', svelte: 'svelte', php: 'php', c: 'c', h: 'c', cpp: 'cpp',
+}
+
+const languageOf = (path: string) => LANGUAGES[path.split('.').pop()?.toLowerCase() ?? '']
+
 function parseDiff(out: string): DiffView['files'] {
   const files: DiffView['files'] = []
   let budget = DIFF_MAX_CHARS
@@ -184,9 +195,17 @@ function parseDiff(out: string): DiffView['files'] {
       if (line.startsWith('+')) added++
       else if (line.startsWith('-')) removed++
     }
-    const isTooLarge = hunks.length > budget
-    if (!isTooLarge) budget -= hunks.length
-    files.push({ path, added, removed, hunks: isTooLarge ? '' : hunks, isTooLarge, isBinary: start < 0 })
+    const isNew = lines.some(line => line.startsWith('new file mode')) || source === '/dev/null'
+    const body = isNew
+      ? lines
+          .slice(start)
+          .filter(line => line.startsWith('+'))
+          .map(line => line.slice(1))
+          .join('\n')
+      : hunks
+    const isTooLarge = body.length > budget
+    if (!isTooLarge) budget -= body.length
+    files.push({ path, added, removed, hunks: isTooLarge ? '' : body, isTooLarge, isBinary: start < 0, isNew })
   }
   return files
 }
@@ -441,6 +460,21 @@ function metaSvg(layout: MetaLayout, pr?: PrInfo) {
 
 
 const diffText = (diff: { added: number; removed: number }) => [`+${diff.added}`, `−${diff.removed}`] as const
+const DIFF_FONT = 11
+const DIFF_CHAR = DIFF_FONT * 0.6
+
+function diffSvg(diff: { added: number; removed: number }, chars: number) {
+  const width = Math.ceil(chars * DIFF_CHAR) + 2
+  const [added, removed] = diffText(diff)
+  return {
+    width,
+    alt: `${diff.added} lines added, ${diff.removed} removed`,
+    source:
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${ROW}" viewBox="0 0 ${width} ${ROW}">` +
+      `<text x="${width}" y="${ROW / 2}" dy="0.35em" text-anchor="end" font-size="${DIFF_FONT}" font-family="${MONO}">` +
+      `<tspan fill="${DOT.open}">${added}</tspan><tspan fill="${DOT.closed}" dx="${DIFF_CHAR}">${removed}</tspan></text></svg>`,
+  }
+}
 
 
 const esc = (text: string) =>
@@ -597,6 +631,7 @@ export const register: Register = on => {
           <Box key={`file-${file.path}`} flexDirection="column">
             <Box flexDirection="row" gap={1}>
               <Text bold wrap="truncate-start">{file.path}</Text>
+              {file.isNew && <Text color="success">new</Text>}
               <Text color="success">+{file.added}</Text>
               <Text color="error">−{file.removed}</Text>
             </Box>
@@ -607,8 +642,10 @@ export const register: Register = on => {
                 <Text dimColor>too large to show here</Text>
                 {view.url && <Link href={`${view.url}/files`} label="open on GitHub" />}
               </Box>
+            ) : file.isNew ? (
+              file.hunks && <Code source={file.hunks} language={languageOf(file.path)} path={file.path} startLine={1} />
             ) : (
-              file.hunks && <Code source={file.hunks} format="diff" path={file.path} />
+              file.hunks && <Code source={file.hunks} format="diff" language={languageOf(file.path)} path={file.path} />
             )}
           </Box>
         ))}
@@ -751,18 +788,22 @@ export const register: Register = on => {
                   </Box>
                 )
               })()}
-              {diffChars > 0 && (
-                <Box width={diffChars} flexShrink={0} justifyContent="flex-end">
-                  {row.diff && !row.isTrunk && (
-                    <Button
-                      key={`diff-${row.branch}`}
-                      plain
-                      label={diffText(row.diff).join(' ')}
-                      onPress={() => void openDiff($, row)}
-                    />
-                  )}
-                </Box>
-              )}
+              {diffChars > 0 && (() => {
+                if (!row.diff || row.isTrunk) {
+                  const width = Math.ceil(diffChars * DIFF_CHAR) + 2
+                  const blank = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${ROW}"></svg>`
+                  return <Svg source={blank} alt="no changes" width={width} height={ROW} />
+                }
+                const stat = diffSvg(row.diff, diffChars)
+                return (
+                  <Box key={`diff-${row.branch}`} flexShrink={0} justifyContent="flex-end">
+                    <Svg source={stat.source} alt={stat.alt} width={stat.width} height={ROW} />
+                    <Box position="absolute" top={0} right={0} display="none" hover={{ display: 'flex' }}>
+                      <Button key={`open-diff-${row.branch}`} plain label="View diff" onPress={() => void openDiff($, row)} />
+                    </Box>
+                  </Box>
+                )
+              })()}
             </Box>
           )
         })}
