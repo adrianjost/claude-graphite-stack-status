@@ -1,9 +1,10 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface as Engine, Register } from 'claude-code'
+import type { EngineInterface as Engine, Register, Timer } from 'claude-code'
 
 import type { CiState, Lane, LinkTarget, PrInfo, StackRow, StackSnapshot } from '../types'
 
 const POLL_MS = 60_000
+const MIN_GAP_MS = 15_000
 const EMPTY: StackSnapshot = { branch: '', rows: [], columns: 1, updatedAt: 0, isLoading: false }
 const snapshot = atom({ plugin: 'graphite-stack', key: 'snapshot' } as const, EMPTY)
 const isHidden = atom({ plugin: 'graphite-stack', key: 'isHidden' } as const, false)
@@ -60,6 +61,8 @@ const PR_FIELDS =
 
 let isRefreshing = false
 let isQueued = false
+let lastRefreshAt = 0
+let scheduled: Timer | undefined
 
 async function run($: Engine, cwd: string, argv: string[]) {
   const result = await $.process.run(argv, { cwd, timeoutMs: 30_000 })
@@ -223,12 +226,23 @@ async function buildRows($: Engine, cwd: string, branch: string): Promise<{ rows
   return { rows, columns }
 }
 
+function requestRefresh($: Engine) {
+  if (scheduled) return
+  const wait = lastRefreshAt + MIN_GAP_MS - Date.now()
+  if (wait <= 0) return void refresh($)
+  scheduled = $.clock.after(wait, () => {
+    scheduled = undefined
+    void refresh($)
+  })
+}
+
 async function refresh($: Engine) {
   if (isRefreshing) {
     isQueued = true
     return
   }
   isRefreshing = true
+  lastRefreshAt = Date.now()
   try {
     const cwd = await $.session.cwd()
     const branch = (await run($, cwd, ['git', 'branch', '--show-current'])) ?? ''
@@ -511,7 +525,11 @@ export const register: Register = on => {
       name: 'stack',
       description: 'Show or hide the Graphite stack above the prompt',
     })
-    $.clock.every(POLL_MS, () => void refresh($))
+    $.clock.every(POLL_MS, () => {
+      void read($, isHidden).then(hidden => {
+        if (!hidden) requestRefresh($)
+      })
+    })
     void refresh($)
 
     return started
@@ -526,7 +544,7 @@ export const register: Register = on => {
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const ran = await next(e)
-    if (/\b(gt|gh|git)\s/.test(e.command)) void refresh($)
+    if (/\b(gt|gh|git)\s/.test(e.command)) requestRefresh($)
 
     return ran
   })
