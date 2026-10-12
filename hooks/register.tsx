@@ -1,13 +1,16 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface as Engine, Register, Timer } from 'claude-code'
 
-import type { CiState, Lane, LinkTarget, PrInfo, StackRow, StackSnapshot } from '../types'
+import type { CiState, DiffView, Lane, LinkTarget, PrInfo, StackRow, StackSnapshot } from '../types'
 
 const POLL_MS = 60_000
 const MIN_GAP_MS = 15_000
 const EMPTY: StackSnapshot = { branch: '', rows: [], columns: 1, updatedAt: 0, isLoading: false }
 const snapshot = atom({ plugin: 'graphite-stack', key: 'snapshot' } as const, EMPTY)
 const isHidden = atom({ plugin: 'graphite-stack', key: 'isHidden' } as const, false)
+const DIFF_PANE = 'graphite-stack-diff'
+const DIFF_MAX_CHARS = 90_000
+const diffView = atom({ plugin: 'graphite-stack', key: 'diffView' } as const, null as DiffView | null)
 const linkTarget = atom({ plugin: 'graphite-stack', key: 'linkTarget' } as const, 'github' as LinkTarget)
 
 type MetaRow = { branch_name: string; parent_branch_name: string | null; children: string | null }
@@ -163,6 +166,43 @@ async function loadPrs($: Engine, cwd: string, branches: string[]) {
     prs.set(branch, pr ? toPrInfo(pr) : undefined)
   })
   return prs
+}
+
+function parseDiff(out: string): DiffView['files'] {
+  const files: DiffView['files'] = []
+  let budget = DIFF_MAX_CHARS
+  for (const chunk of out.split(/^diff --git /m).slice(1)) {
+    const lines = chunk.split('\n')
+    const target = lines.find(line => line.startsWith('+++ '))?.slice(4)
+    const source = lines.find(line => line.startsWith('--- '))?.slice(4)
+    const path = (target && target !== '/dev/null' ? target : source ?? lines[0] ?? '?').replace(/^[ab]\//, '')
+    const start = lines.findIndex(line => line.startsWith('@@'))
+    const hunks = start < 0 ? '' : lines.slice(start).join('\n').trimEnd()
+    let added = 0
+    let removed = 0
+    for (const line of start < 0 ? [] : lines.slice(start)) {
+      if (line.startsWith('+')) added++
+      else if (line.startsWith('-')) removed++
+    }
+    const isTooLarge = hunks.length > budget
+    if (!isTooLarge) budget -= hunks.length
+    files.push({ path, added, removed, hunks: isTooLarge ? '' : hunks, isTooLarge, isBinary: start < 0 })
+  }
+  return files
+}
+
+async function openDiff($: Engine, row: StackRow) {
+  if (!row.parent) return
+  const title = row.pr ? `#${row.pr.number} ${row.pr.title}` : row.branch
+  await update($, diffView, () => ({ title, url: row.pr?.url, files: [], isLoading: true }))
+  void $.ui.open({ id: DIFF_PANE, title: row.pr ? `#${row.pr.number} changes` : 'Branch changes' })
+  const cwd = await $.session.cwd()
+  const out = await run($, cwd, ['git', 'diff', '-w', '--no-color', '--no-ext-diff', `${row.parent}...${row.branch}`])
+  await update($, diffView, () =>
+    out === undefined
+      ? { title, url: row.pr?.url, files: [], isLoading: false, error: `git diff ${row.parent}...${row.branch} failed` }
+      : { title, url: row.pr?.url, files: parseDiff(out), isLoading: false },
+  )
 }
 
 async function buildRows($: Engine, cwd: string, branch: string): Promise<{ rows: StackRow[]; columns: number } | string> {
@@ -399,23 +439,9 @@ function metaSvg(layout: MetaLayout, pr?: PrInfo) {
   }
 }
 
-const DIFF_FONT = 11
-const DIFF_CHAR = DIFF_FONT * 0.6
 
 const diffText = (diff: { added: number; removed: number }) => [`+${diff.added}`, `−${diff.removed}`] as const
 
-function diffSvg(diff: { added: number; removed: number } | undefined, chars: number) {
-  const width = Math.ceil(chars * DIFF_CHAR) + 2
-  const body = diff
-    ? `<text x="${width}" y="${ROW / 2}" dy="0.35em" text-anchor="end" font-size="${DIFF_FONT}" font-family="${MONO}">` +
-      `<tspan fill="${DOT.open}">${diffText(diff)[0]}</tspan><tspan fill="${DOT.closed}" dx="${DIFF_CHAR}">${diffText(diff)[1]}</tspan></text>`
-    : ''
-  return {
-    width,
-    alt: diff ? `${diff.added} lines added, ${diff.removed} removed` : 'no changes',
-    source: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${ROW}" viewBox="0 0 ${width} ${ROW}">${body}</svg>`,
-  }
-}
 
 const esc = (text: string) =>
   text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
@@ -547,6 +573,47 @@ export const register: Register = on => {
     if (/\b(gt|gh|git)\s/.test(e.command)) requestRefresh($)
 
     return ran
+  })
+
+  on('ui.render', { component: 'Pane', requestId: DIFF_PANE }, async ($, e) => {
+    const { Box, Text, Link, Code } = $.ui.resolve(e)
+    const view = await read($, diffView)
+    if (!view) return <Text dimColor>Click a branch's line counts to see its changes.</Text>
+    const added = view.files.reduce((sum, file) => sum + file.added, 0)
+    const removed = view.files.reduce((sum, file) => sum + file.removed, 0)
+
+    return (
+      <Box flexDirection="column" gap={1}>
+        <Box flexDirection="column">
+          <Text bold wrap="truncate-end">{view.title}</Text>
+          <Text dimColor>
+            {view.isLoading
+              ? 'loading…'
+              : `${view.files.length} file${view.files.length === 1 ? '' : 's'} · +${added} −${removed} · whitespace ignored`}
+          </Text>
+        </Box>
+        {view.error && <Text color="error">{view.error}</Text>}
+        {view.files.map(file => (
+          <Box key={`file-${file.path}`} flexDirection="column">
+            <Box flexDirection="row" gap={1}>
+              <Text bold wrap="truncate-start">{file.path}</Text>
+              <Text color="success">+{file.added}</Text>
+              <Text color="error">−{file.removed}</Text>
+            </Box>
+            {file.isBinary ? (
+              <Text dimColor>binary file</Text>
+            ) : file.isTooLarge ? (
+              <Box flexDirection="row" gap={1}>
+                <Text dimColor>too large to show here</Text>
+                {view.url && <Link href={`${view.url}/files`} label="open on GitHub" />}
+              </Box>
+            ) : (
+              file.hunks && <Code source={file.hunks} format="diff" path={file.path} />
+            )}
+          </Box>
+        ))}
+      </Box>
+    )
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -684,14 +751,18 @@ export const register: Register = on => {
                   </Box>
                 )
               })()}
-              {diffChars > 0 && (() => {
-                const stat = diffSvg(row.isTrunk ? undefined : row.diff, diffChars)
-                return (
-                  <Box flexShrink={0}>
-                    <Svg source={stat.source} alt={stat.alt} width={stat.width} height={ROW} />
-                  </Box>
-                )
-              })()}
+              {diffChars > 0 && (
+                <Box width={diffChars} flexShrink={0} justifyContent="flex-end">
+                  {row.diff && !row.isTrunk && (
+                    <Button
+                      key={`diff-${row.branch}`}
+                      plain
+                      label={diffText(row.diff).join(' ')}
+                      onPress={() => void openDiff($, row)}
+                    />
+                  )}
+                </Box>
+              )}
             </Box>
           )
         })}

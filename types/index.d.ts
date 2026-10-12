@@ -1,5 +1,13 @@
 export type LinkTarget = 'github' | 'graphite'
 
+export type DiffView = {
+  title: string
+  url?: string
+  files: { path: string; added: number; removed: number; hunks: string; isTooLarge: boolean; isBinary: boolean }[]
+  isLoading: boolean
+  error?: string
+}
+
 export type CiState = 'pass' | 'fail' | 'pending' | 'none'
 
 export type PrInfo = {
@@ -48,6 +56,6 @@ export type StackSnapshot = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'graphite-stack': { snapshot: StackSnapshot; isHidden: boolean; linkTarget: LinkTarget }
+    'graphite-stack': { snapshot: StackSnapshot; isHidden: boolean; linkTarget: LinkTarget; diffView: DiffView | null }
   }
 }
