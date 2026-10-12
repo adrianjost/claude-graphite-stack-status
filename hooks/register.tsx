@@ -24,18 +24,39 @@ type GhCheck = {
   startedAt?: string
 }
 
-type GhPr = {
+type GqlCheck = {
+  __typename: string
+  name?: string
+  status?: string
+  conclusion?: string
+  detailsUrl?: string
+  startedAt?: string
+  checkSuite?: { workflowRun?: { workflow?: { name: string } } | null } | null
+  context?: string
+  state?: string
+  targetUrl?: string
+}
+
+type GqlPr = {
   number: number
   title: string
   url: string
   state: string
   isDraft: boolean
-  reviewDecision: string
-  labels: { name: string; color: string }[]
-  statusCheckRollup: GhCheck[]
-  reviewRequests: unknown[]
-  latestReviews: unknown[]
+  reviewDecision: string | null
+  labels: { nodes: { name: string; color: string }[] }
+  reviewRequests: { totalCount: number }
+  latestReviews: { totalCount: number }
+  reviewThreads: { nodes: { isResolved: boolean }[] }
+  commits: { nodes: { commit: { statusCheckRollup: { contexts: { nodes: GqlCheck[] } } | null } }[] }
 }
+
+const PR_FIELDS =
+  'number title url state isDraft reviewDecision labels(first:20){nodes{name color}} ' +
+  'reviewRequests{totalCount} latestReviews{totalCount} reviewThreads(first:100){nodes{isResolved}} ' +
+  'commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ' +
+  '... on CheckRun{name status conclusion detailsUrl startedAt checkSuite{workflowRun{workflow{name}}}} ' +
+  '... on StatusContext{context state targetUrl}}}}}}}'
 
 let isRefreshing = false
 let isQueued = false
@@ -53,21 +74,6 @@ function checkState(check: GhCheck): CiState {
   }
   if (check.status !== 'COMPLETED') return 'pending'
   return ['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(check.conclusion ?? '') ? 'pass' : 'fail'
-}
-
-async function countOpenThreads($: Engine, cwd: string, url: string, number: number) {
-  const [, owner, repo] = url.match(/github\.com\/([^/]+)\/([^/]+)\//) ?? []
-  if (!owner || !repo) return 0
-  const out = await run($, cwd, [
-    'gh', 'api', 'graphql',
-    '-F', `owner=${owner}`, '-F', `repo=${repo}`, '-F', `number=${number}`,
-    '-f', 'query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved}}}}}',
-  ])
-  if (!out) throw new GitHubError('review threads unavailable')
-  const data = JSON.parse(out) as {
-    data?: { repository?: { pullRequest?: { reviewThreads?: { nodes: { isResolved: boolean }[] } } } }
-  }
-  return data.data?.repository?.pullRequest?.reviewThreads?.nodes.filter(t => !t.isResolved).length ?? 0
 }
 
 function latestChecks(checks: GhCheck[]) {
@@ -95,20 +101,20 @@ async function diffStat($: Engine, cwd: string, parent: string, branch: string) 
 
 class GitHubError extends Error {}
 
-async function loadPr($: Engine, cwd: string, branch: string): Promise<PrInfo | undefined> {
-  const result = await $.process.run(
-    ['gh', 'pr', 'view', branch, '--json', 'number,title,url,state,isDraft,reviewDecision,labels,statusCheckRollup,reviewRequests,latestReviews'],
-    { cwd, timeoutMs: 30_000 },
-  )
-  if (result.exitCode !== 0) {
-    if (/no pull requests found/i.test(result.stderr)) return undefined
-    throw new GitHubError(result.stderr.trim())
-  }
-  const pr = JSON.parse(result.stdout) as GhPr
-  const openThreads = await countOpenThreads($, cwd, pr.url, pr.number)
+async function githubRepo($: Engine, cwd: string) {
+  const url = (await run($, cwd, ['git', 'remote', 'get-url', 'origin'])) ?? ''
+  const [, owner, name] = url.match(/github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?$/) ?? []
+  return owner && name ? { owner, name } : undefined
+}
+
+function toPrInfo(pr: GqlPr): PrInfo {
+  const checks: GhCheck[] = (pr.commits.nodes[0]?.commit.statusCheckRollup?.contexts.nodes ?? []).map(check => ({
+    ...check,
+    workflowName: check.checkSuite?.workflowRun?.workflow?.name,
+  }))
   const ciCounts = { pass: 0, fail: 0, pending: 0 }
   const failing: PrInfo['failing'] = []
-  for (const check of latestChecks(pr.statusCheckRollup ?? [])) {
+  for (const check of latestChecks(checks)) {
     const state = checkState(check)
     ciCounts[state === 'none' ? 'pass' : state]++
     if (state === 'fail') {
@@ -125,13 +131,35 @@ async function loadPr($: Engine, cwd: string, branch: string): Promise<PrInfo | 
     state: pr.state,
     isDraft: pr.isDraft,
     reviewDecision: pr.reviewDecision ?? '',
-    labels: (pr.labels ?? []).map(l => ({ name: l.name, color: l.color })),
+    labels: pr.labels.nodes.map(l => ({ name: l.name, color: l.color })),
     ci,
     ciCounts,
     failing,
-    openThreads,
-    hasReviewers: (pr.reviewRequests ?? []).length + (pr.latestReviews ?? []).length > 0,
+    openThreads: pr.reviewThreads.nodes.filter(t => !t.isResolved).length,
+    hasReviewers: pr.reviewRequests.totalCount + pr.latestReviews.totalCount > 0,
   }
+}
+
+async function loadPrs($: Engine, cwd: string, branches: string[]) {
+  const prs = new Map<string, PrInfo | undefined>()
+  if (!branches.length) return prs
+  const repo = await githubRepo($, cwd)
+  if (!repo) throw new GitHubError('origin is not a GitHub repository')
+  const fields = branches.map(
+    (branch, i) =>
+      `b${i}:pullRequests(headRefName:${JSON.stringify(branch)},first:1,orderBy:{field:CREATED_AT,direction:DESC}){nodes{${PR_FIELDS}}}`,
+  )
+  const query = `query{repository(owner:${JSON.stringify(repo.owner)},name:${JSON.stringify(repo.name)}){${fields.join(' ')}}}`
+  const result = await $.process.run(['gh', 'api', 'graphql', '-f', `query=${query}`], { cwd, timeoutMs: 30_000 })
+  if (result.exitCode !== 0) throw new GitHubError(result.stderr.trim())
+  const data = JSON.parse(result.stdout) as { data?: { repository?: Record<string, { nodes: GqlPr[] } | null> } }
+  const found = data.data?.repository
+  if (!found) throw new GitHubError('unexpected GitHub response')
+  branches.forEach((branch, i) => {
+    const pr = found[`b${i}`]?.nodes[0]
+    prs.set(branch, pr ? toPrInfo(pr) : undefined)
+  })
+  return prs
 }
 
 async function buildRows($: Engine, cwd: string, branch: string): Promise<{ rows: StackRow[]; columns: number } | string> {
@@ -212,16 +240,18 @@ async function refresh($: Engine) {
     }
 
     const previous = new Map((await read($, snapshot)).rows.map(row => [row.branch, row.pr]))
-    let isStale = false
+    const prs = await loadPrs(
+      $,
+      cwd,
+      built.rows.filter(row => !row.isTrunk).map(row => row.branch),
+    ).catch(() => undefined)
+    const isStale = !prs
     const rows = await Promise.all(
       built.rows.map(async row => {
         if (row.isTrunk) return row
         const parent = row.parent
         const [pr, isAncestor, diff] = await Promise.all([
-          loadPr($, cwd, row.branch).catch(() => {
-            isStale = true
-            return previous.get(row.branch)
-          }),
+          prs ? prs.get(row.branch) : previous.get(row.branch),
           parent
             ? $.process
                 .run(['git', 'merge-base', '--is-ancestor', parent, row.branch], { cwd })
