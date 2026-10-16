@@ -48,6 +48,10 @@ The band appears on its own whenever the session's branch belongs to a Graphite 
 
 Pick where clicking a PR title opens it with the **Links** picker in the band's header: GitHub (default) or Graphite. The choice is remembered across sessions.
 
+## Troubleshooting
+
+When something keeps the band from working, it shows a ⚠ line with the reason, for example a missing `gh` or `sqlite3`, a `gt` version too old to read, `gh` not signed in, or GitHub's rate limit. Click its button to have Claude fix the problem, or to look into it and suggest a fix when the cause isn't clear.
+
 ## License
 
 MIT

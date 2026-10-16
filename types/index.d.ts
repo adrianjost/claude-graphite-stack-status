@@ -8,6 +8,13 @@ export type DiffView = {
   error?: string
 }
 
+export type Issue = {
+  message: string
+  detail?: string
+  fix?: { label: string; prompt: string }
+  canFix?: false
+}
+
 export type CiState = 'pass' | 'fail' | 'pending' | 'none'
 
 export type PrInfo = {
@@ -48,9 +55,9 @@ export type StackSnapshot = {
   branch: string
   rows: StackRow[]
   columns: number
-  error?: string
   updatedAt: number
   isStale?: boolean
+  issue?: Issue
   isLoading: boolean
 }
 

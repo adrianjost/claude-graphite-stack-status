@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface as Engine, Register, Timer } from 'claude-code'
 
-import type { CiState, DiffView, Lane, LinkTarget, PrInfo, StackRow, StackSnapshot } from '../types'
+import type { CiState, DiffView, Issue, Lane, LinkTarget, PrInfo, StackRow, StackSnapshot } from '../types'
 
 const POLL_MS = 60_000
 const MIN_GAP_MS = 15_000
@@ -67,9 +67,71 @@ let isQueued = false
 let lastRefreshAt = 0
 let scheduled: Timer | undefined
 
+class Problem extends Error {
+  constructor(readonly issue: Issue) {
+    super(issue.message)
+  }
+}
+
+const TOOLS: Record<string, string> = {
+  git: 'git',
+  gh: 'The GitHub CLI (gh)',
+  gt: 'The Graphite CLI (gt)',
+  sqlite3: 'sqlite3',
+}
+
+async function exec($: Engine, cwd: string, argv: string[]) {
+  try {
+    return await $.process.run(argv, { cwd, timeoutMs: 30_000 })
+  } catch (error) {
+    const tool = argv[0] ?? ''
+    throw new Problem({
+      message: `${TOOLS[tool] ?? tool} isn't installed or not on Claude Code's PATH`,
+      detail: String(error),
+      fix: {
+        label: 'Fix',
+        prompt:
+          `The graphite-stack plugin needs \`${tool}\`, but Claude Code can't start it. ` +
+          'Check whether it is installed and on the PATH Claude Code uses, and help me install or fix it.',
+      },
+    })
+  }
+}
+
 async function run($: Engine, cwd: string, argv: string[]) {
-  const result = await $.process.run(argv, { cwd, timeoutMs: 30_000 })
+  const result = await exec($, cwd, argv)
   return result.exitCode === 0 ? result.stdout.trim() : undefined
+}
+
+async function gtVersion($: Engine, cwd: string) {
+  try {
+    return (await run($, cwd, ['gt', '--version'])) ?? 'unknown version'
+  } catch {
+    return 'not installed'
+  }
+}
+
+function githubIssue(error: unknown, updatedAt: number): Issue {
+  const text = error instanceof Error ? error.message : String(error)
+  const since = updatedAt ? ` · showing data from ${new Date(updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''
+  if (error instanceof Problem) return error.issue
+  if (/rate limit/i.test(text)) {
+    return { message: `GitHub API rate limit reached${since}`, detail: 'It resets within the hour.', canFix: false }
+  }
+  if (/auth|log ?in|401|credentials|token/i.test(text)) {
+    return {
+      message: `gh isn't signed in to GitHub${since}`,
+      detail: text,
+      fix: {
+        label: 'Sign in',
+        prompt: 'The graphite-stack plugin can\'t load PR data because the GitHub CLI isn\'t signed in. Run `gh auth status` and help me sign in.',
+      },
+    }
+  }
+  if (/not a GitHub repository/.test(text)) {
+    return { message: "This repository's origin isn't on GitHub, so there's no PR data", canFix: false }
+  }
+  return { message: `Couldn't load PR data from GitHub${since}`, detail: text }
 }
 
 function checkState(check: GhCheck): CiState {
@@ -156,7 +218,7 @@ async function loadPrs($: Engine, cwd: string, branches: string[]) {
       `b${i}:pullRequests(headRefName:${JSON.stringify(branch)},first:1,orderBy:{field:CREATED_AT,direction:DESC}){nodes{${PR_FIELDS}}}`,
   )
   const query = `query{repository(owner:${JSON.stringify(repo.owner)},name:${JSON.stringify(repo.name)}){${fields.join(' ')}}}`
-  const result = await $.process.run(['gh', 'api', 'graphql', '-f', `query=${query}`], { cwd, timeoutMs: 30_000 })
+  const result = await exec($, cwd, ['gh', 'api', 'graphql', '-f', `query=${query}`])
   if (result.exitCode !== 0) throw new GitHubError(result.stderr.trim())
   const data = JSON.parse(result.stdout) as { data?: { repository?: Record<string, { nodes: GqlPr[] } | null> } }
   const found = data.data?.repository
@@ -224,16 +286,44 @@ async function openDiff($: Engine, row: StackRow) {
   )
 }
 
+async function readMetadata($: Engine, cwd: string, gitDir: string) {
+  const db = `${gitDir}/.graphite_metadata.db`
+  if ((await run($, cwd, ['test', '-e', db])) === undefined) {
+    const legacy = await run($, cwd, ['git', 'for-each-ref', 'refs/branch-metadata', '--count=1', '--format=%(refname)'])
+    if (!legacy) return undefined
+    throw new Problem({
+      message: 'This repo\'s stack data is in an older Graphite format. Update gt to read it',
+      detail: `gt ${await gtVersion($, cwd)}`,
+      fix: {
+        label: 'Update gt',
+        prompt:
+          'The graphite-stack plugin can\'t read this repo\'s Graphite stack: the stack metadata is stored in git refs ' +
+          '(refs/branch-metadata), the format of older gt versions, instead of .git/.graphite_metadata.db. ' +
+          'Check which gt version I have and how it was installed, then help me update the Graphite CLI and migrate the repo.',
+      },
+    })
+  }
+  const result = await exec($, cwd, ['sqlite3', '-json', db, 'select branch_name, parent_branch_name, children from branch_metadata'])
+  if (result.exitCode !== 0) {
+    const version = await gtVersion($, cwd)
+    const isSchema = /no such (table|column)/i.test(result.stderr)
+    throw new Problem({
+      message: isSchema
+        ? `Graphite changed its stack data format (gt ${version}). The plugin may need an update`
+        : "Couldn't read Graphite's stack data",
+      detail: result.stderr.trim(),
+    })
+  }
+  return JSON.parse(result.stdout.trim() || '[]') as MetaRow[]
+}
+
 async function buildRows($: Engine, cwd: string, branch: string): Promise<{ rows: StackRow[]; columns: number } | string> {
   const gitDir = await run($, cwd, ['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'])
   if (!gitDir) return 'Not a git repository.'
-  const out = await run($, cwd, [
-    'sqlite3', '-json', `${gitDir}/.graphite_metadata.db`,
-    'select branch_name, parent_branch_name, children from branch_metadata',
-  ])
-  if (out === undefined) return 'No Graphite metadata in this repository.'
+  const metadata = await readMetadata($, cwd, gitDir)
+  if (!metadata) return 'No Graphite metadata in this repository.'
   const meta = new Map<string, MetaRow>()
-  for (const row of JSON.parse(out || '[]') as MetaRow[]) meta.set(row.branch_name, row)
+  for (const row of metadata) meta.set(row.branch_name, row)
 
   const current = meta.get(branch)
   if (!current || (!current.parent_branch_name && !current.children?.length)) {
@@ -308,16 +398,21 @@ async function refresh($: Engine) {
     await update($, snapshot, s => ({ ...s, isLoading: true }))
     const built = branch ? await buildRows($, cwd, branch) : 'Detached HEAD.'
     if (typeof built === 'string') {
-      await update($, snapshot, () => ({ branch, rows: [], columns: 1, error: built, updatedAt: Date.now(), isLoading: false }))
+      await update($, snapshot, () => ({ branch, rows: [], columns: 1, updatedAt: Date.now(), isLoading: false }))
       return
     }
 
     const previous = new Map((await read($, snapshot)).rows.map(row => [row.branch, row.pr]))
+    const lastUpdate = (await read($, snapshot)).updatedAt
+    let issue: Issue | undefined
     const prs = await loadPrs(
       $,
       cwd,
       built.rows.filter(row => !row.isTrunk).map(row => row.branch),
-    ).catch(() => undefined)
+    ).catch(error => {
+      issue = githubIssue(error, lastUpdate)
+      return undefined
+    })
     const isStale = !prs
     const rows = await Promise.all(
       built.rows.map(async row => {
@@ -342,12 +437,15 @@ async function refresh($: Engine) {
       columns: built.columns,
       updatedAt: isStale ? s.updatedAt : Date.now(),
       isStale,
+      issue,
       isLoading: false,
     }))
     const failing = rows.filter(r => r.pr?.ci === 'fail').length
     $.ui.status(failing ? `stack: ${failing} PR${failing > 1 ? 's' : ''} failing CI` : undefined)
   } catch (error) {
-    await update($, snapshot, s => ({ ...s, error: String(error), isLoading: false }))
+    const issue: Issue =
+      error instanceof Problem ? error.issue : { message: 'The Graphite stack couldn\'t be refreshed', detail: String(error) }
+    await update($, snapshot, s => ({ ...s, rows: error instanceof Problem ? [] : s.rows, issue, isLoading: false }))
   } finally {
     isRefreshing = false
     if (isQueued) {
@@ -575,6 +673,11 @@ function graphiteUrl(pr: PrInfo) {
   return owner && repo ? `https://app.graphite.com/github/pr/${owner}/${repo}/${pr.number}` : pr.url
 }
 
+const fixPrompt = (issue: Issue) =>
+  `The graphite-stack Claude Code plugin (github.com/adrianjost/claude-graphite-stack-status) shows this problem: ` +
+  `"${issue.message}"${issue.detail ? ` (details: ${issue.detail})` : ''}. ` +
+  'Investigate the cause on this machine, search the web if that helps, and suggest a fix.'
+
 export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
@@ -655,7 +758,7 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const s = await read($, snapshot)
-    if (e.props.hasSurvey || (await read($, isHidden)) || !s.rows.length) return next(e)
+    if (e.props.hasSurvey || (await read($, isHidden)) || (!s.rows.length && !s.issue)) return next(e)
 
     if (e.surface !== 'desktop') return next(e)
     const elements = $.ui.resolve(e)
@@ -675,7 +778,7 @@ export const register: Register = on => {
       `${prs.length} PR${prs.length === 1 ? '' : 's'}`,
       failing ? `${failing} failing` : '',
       s.isLoading ? 'refreshing…' : '',
-      s.isStale ? `GitHub unreachable · data from ${s.updatedAt ? new Date(s.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'never'}` : '',
+
     ].filter(Boolean).join(' · ')
 
     return (
@@ -701,6 +804,32 @@ export const register: Register = on => {
           <Button key="refresh" plain dimColor hotkey="r" label="Refresh" onPress={() => void refresh($)} />
           <Button key="hide" plain dimColor hotkey="h" label="Hide" onPress={() => void update($, isHidden, () => true)} />
         </Box>
+        {s.issue && (
+          <Box flexDirection="row" alignItems="center" gap={1} marginBottom={1}>
+            <Text color="warning">⚠</Text>
+            <Box flexShrink={1} minWidth={0}>
+              <Text wrap="truncate-end">{s.issue.message}</Text>
+            </Box>
+            {s.issue.detail && (
+              <Box flexShrink={2} minWidth={0}>
+                <Text dimColor wrap="truncate-end">{s.issue.detail}</Text>
+              </Box>
+            )}
+            {s.issue.canFix !== false && (
+              <Box flexShrink={0}>
+                <Button
+                  key="fix-issue"
+                  plain
+                  label={s.issue.fix?.label ?? 'Suggest fix'}
+                  onPress={() => {
+                    const issue = s.issue
+                    if (issue) void $.prompt.submit({ text: issue.fix?.prompt ?? fixPrompt(issue), asUser: true })
+                  }}
+                />
+              </Box>
+            )}
+          </Box>
+        )}
         {s.rows.map(row => {
           const pr = row.pr
           const lane = laneSvg(row.lane, s.columns, pr ? prDot(pr) : undefined)
@@ -807,7 +936,6 @@ export const register: Register = on => {
             </Box>
           )
         })}
-        {s.error && <Text color="warning">{s.error}</Text>}
       </Box>
     )
   })
