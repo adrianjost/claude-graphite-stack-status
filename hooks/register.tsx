@@ -14,7 +14,7 @@ const DIFF_DRAW_BUDGET = 95_000
 const diffView = atom({ plugin: 'graphite-stack', key: 'diffView' } as const, null as DiffView | null)
 const linkTarget = atom({ plugin: 'graphite-stack', key: 'linkTarget' } as const, 'github' as LinkTarget)
 
-type MetaRow = { branch_name: string; parent_branch_name: string | null; children: string | null }
+type MetaRow = { branch_name: string; parent_branch_name: string | null; children: string | null; validation_result: string | null }
 
 type GhCheck = {
   __typename: string
@@ -109,6 +109,20 @@ async function gtVersion($: Engine, cwd: string) {
     return (await run($, cwd, ['gt', '--version'])) ?? 'unknown version'
   } catch {
     return 'not installed'
+  }
+}
+
+function detachedIssue(branch: string, trunk: string): Issue {
+  return {
+    message: `Graphite has lost track of ${branch}'s parent, so it's shown on ${trunk}`,
+    detail: 'Usually the parent branch was merged and deleted.',
+    fix: {
+      label: 'Track it',
+      prompt:
+        `Graphite has lost track of the parent of the branch \`${branch}\` (its metadata says BAD_PARENT_NAME, ` +
+        'usually because the parent was merged and deleted). Find the right parent, most likely trunk or the branch its PR targets, ' +
+        're-attach it with `gt track`, and restack if needed. Switch back to the branch I was on afterwards and don\'t push anything.',
+    },
   }
 }
 
@@ -351,7 +365,7 @@ async function openDiff($: Engine, row: StackRow, options?: Partial<Pick<DiffVie
 
 async function refreshDiff($: Engine) {
   const view = await read($, diffView)
-  if (!view || view.isLoading) return
+  if (!view?.branch || view.isLoading) return
   const cwd = await $.session.cwd()
   const head = await run($, cwd, ['git', 'rev-parse', view.branch])
   if (head && head !== view.headSha) await loadDiff($, view, view.collapsed)
@@ -374,7 +388,7 @@ async function readMetadata($: Engine, cwd: string, gitDir: string) {
       },
     })
   }
-  const result = await exec($, cwd, ['sqlite3', '-json', db, 'select branch_name, parent_branch_name, children from branch_metadata'])
+  const result = await exec($, cwd, ['sqlite3', '-json', db, 'select branch_name, parent_branch_name, children, validation_result from branch_metadata'])
   if (result.exitCode !== 0) {
     const version = await gtVersion($, cwd)
     const isSchema = /no such (table|column)/i.test(result.stderr)
@@ -388,7 +402,11 @@ async function readMetadata($: Engine, cwd: string, gitDir: string) {
   return JSON.parse(result.stdout.trim() || '[]') as MetaRow[]
 }
 
-async function buildRows($: Engine, cwd: string, branch: string): Promise<{ rows: StackRow[]; columns: number } | string> {
+async function buildRows(
+  $: Engine,
+  cwd: string,
+  branch: string,
+): Promise<{ rows: StackRow[]; columns: number; detached?: string } | string> {
   const gitDir = await run($, cwd, ['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'])
   if (!gitDir) return 'Not a git repository.'
   const metadata = await readMetadata($, cwd, gitDir)
@@ -396,21 +414,24 @@ async function buildRows($: Engine, cwd: string, branch: string): Promise<{ rows
   const meta = new Map<string, MetaRow>()
   for (const row of metadata) meta.set(row.branch_name, row)
 
+  const trunk = metadata.find(row => row.validation_result === 'TRUNK')?.branch_name ?? 'main'
   const current = meta.get(branch)
-  if (!current || (!current.parent_branch_name && !current.children?.length)) {
-    return `${branch} is not tracked by Graphite.`
-  }
+  if (!current || branch === trunk) return `${branch} is not part of a Graphite stack.`
 
+  const parentOf = (name: string) => {
+    const parent = meta.get(name)?.parent_branch_name
+    return parent && meta.has(parent) ? parent : undefined
+  }
   let root = branch
   const seen = new Set([root])
-  for (let parent = current.parent_branch_name; parent; parent = meta.get(parent)?.parent_branch_name ?? null) {
-    if (seen.has(parent) || !meta.get(parent)?.parent_branch_name) break
+  for (let parent = parentOf(root); parent && parent !== trunk && !seen.has(parent); parent = parentOf(parent)) {
     seen.add(parent)
     root = parent
   }
-  const trunk = meta.get(root)?.parent_branch_name
+  const detached = parentOf(root) ? undefined : root
 
-  const childrenOf = (name: string) => JSON.parse(meta.get(name)?.children ?? '[]') as string[]
+  const childrenOf = (name: string) =>
+    (JSON.parse(meta.get(name)?.children ?? '[]') as string[]).filter(child => meta.has(child))
   const rows: StackRow[] = []
   let columns = 1
   const layout = (name: string, col: number, open: number[], parent?: string) => {
@@ -429,21 +450,16 @@ async function buildRows($: Engine, cwd: string, branch: string): Promise<{ rows
       needsRestack: false,
     })
   }
-  layout(root, 0, [], trunk ?? undefined)
-  if (trunk) {
-    rows.push({
-      branch: trunk,
-      lane: { col: 0, up: true, down: false, pipes: [], corners: [] },
-      isCurrent: false,
-      isTrunk: true,
-      needsRestack: false,
-    })
-  } else {
-    const last = rows.at(-1)
-    if (last) last.lane.down = false
-  }
+  layout(root, 0, [], trunk)
+  rows.push({
+    branch: trunk,
+    lane: { col: 0, up: true, down: false, pipes: [], corners: [] },
+    isCurrent: false,
+    isTrunk: true,
+    needsRestack: false,
+  })
 
-  return { rows, columns }
+  return { rows, columns, detached }
 }
 
 function requestRefresh($: Engine) {
@@ -508,7 +524,7 @@ async function refresh($: Engine) {
       columns: built.columns,
       updatedAt: isStale ? s.updatedAt : Date.now(),
       isStale,
-      issue,
+      issue: issue ?? (built.detached ? detachedIssue(built.detached, built.rows.find(row => row.isTrunk)?.branch ?? 'main') : undefined),
       isLoading: false,
     }))
     void refreshDiff($)
@@ -794,7 +810,7 @@ export const register: Register = on => {
     if (!('Select' in elements)) return <elements.Text dimColor>The diff view needs the Claude Code desktop app.</elements.Text>
     const { Box, Text, Link, Code, Button, Select } = elements
     const view = await read($, diffView)
-    if (!view) return <Text dimColor>Hover a branch's line counts and click View diff to see its changes.</Text>
+    if (!view?.branch) return <Text dimColor>Hover a branch's line counts and click View diff to see its changes.</Text>
     const order = stackOrder((await read($, snapshot)).rows)
     const at = order.findIndex(row => row.branch === view.branch)
     const previous = at > 0 ? order[at - 1] : undefined
