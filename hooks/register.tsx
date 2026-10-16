@@ -48,7 +48,7 @@ type GqlPr = {
   state: string
   isDraft: boolean
   reviewDecision: string | null
-  labels: { nodes: { name: string; color: string }[] }
+  labels: { nodes: { name: string; color: string; description: string | null }[] }
   reviewRequests: { totalCount: number }
   latestReviews: { totalCount: number }
   reviewThreads: { nodes: { isResolved: boolean }[] }
@@ -56,7 +56,7 @@ type GqlPr = {
 }
 
 const PR_FIELDS =
-  'number title url state isDraft reviewDecision labels(first:20){nodes{name color}} ' +
+  'number title url state isDraft reviewDecision labels(first:20){nodes{name color description}} ' +
   'reviewRequests{totalCount} latestReviews{totalCount} reviewThreads(first:100){nodes{isResolved}} ' +
   'commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ' +
   '... on CheckRun{name status conclusion detailsUrl startedAt checkSuite{workflowRun{workflow{name}}}} ' +
@@ -199,7 +199,7 @@ function toPrInfo(pr: GqlPr): PrInfo {
     state: pr.state,
     isDraft: pr.isDraft,
     reviewDecision: pr.reviewDecision ?? '',
-    labels: pr.labels.nodes.map(l => ({ name: l.name, color: l.color })),
+    labels: pr.labels.nodes.map(l => ({ name: l.name, color: l.color, description: l.description ?? undefined })),
     ci,
     ciCounts,
     failing,
@@ -659,24 +659,18 @@ function labelsSvg(labels: PrInfo['labels']) {
   }
   const hidden = labels.length - shown.length
   const y = (ROW - 18) / 2
-  const parts: string[] = []
-  let x = 0
-  for (const label of shown) {
-    const pill = pillParts(label.name, `#${label.color}`, labelInk(label.color), x, y)
-    parts.push(pill.body)
-    x += pill.width + PILL_GAP
-  }
-  if (hidden) {
-    const pill = pillParts(`+${hidden}`, LINE, LINE, x, y, 0.22)
-    parts.push(pill.body)
-    x += pill.width + PILL_GAP
-  }
-  const width = Math.max(0, x - PILL_GAP)
-  return {
-    width,
-    hidden,
-    source: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${ROW}" viewBox="0 0 ${width} ${ROW}">${parts.join('')}</svg>`,
-  }
+  const pills = [
+    ...shown.map(label => ({ label, ...pillParts(label.name, `#${label.color}`, labelInk(label.color), 0, y) })),
+    ...(hidden ? [{ label: undefined, ...pillParts(`+${hidden}`, LINE, LINE, 0, y, 0.22) }] : []),
+  ]
+  return pills.map((pill, i) => {
+    const width = pill.width + (i < pills.length - 1 ? PILL_GAP : 0)
+    return {
+      label: pill.label,
+      width,
+      source: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${ROW}" viewBox="0 0 ${width} ${ROW}">${pill.body}</svg>`,
+    }
+  })
 }
 
 function graphiteUrl(pr: PrInfo) {
@@ -913,31 +907,43 @@ export const register: Register = on => {
                   />
                 </Box>
               )}
-              {pr && pr.labels.length > 0 && (() => {
-                const labels = labelsSvg(pr.labels)
-                return (
-                  <Box key={`labels-${row.branch}`} flexShrink={0}>
-                    <Svg source={labels.source} alt={pr.labels.map(l => l.name).join(', ')} width={labels.width} height={ROW} />
-                    {labels.hidden > 0 && (
-                      <Box
-                        position="absolute"
-                        top={1}
-                        right={0}
-                        display="none"
-                        hover={{ display: 'flex' }}
-                        flexDirection="column"
-                        paddingX={1}
-                      >
-                        <Text dimColor>{pr.labels.length} labels</Text>
-                        {pr.labels.map(label => {
-                          const pill = pillSvg(label)
-                          return <Svg source={pill.source} alt={label.name} width={pill.width} height={pill.height} />
-                        })}
-                      </Box>
-                    )}
-                  </Box>
-                )
-              })()}
+              {pr && pr.labels.length > 0 && (
+                <Box flexDirection="row" alignItems="center" flexShrink={0}>
+                  {labelsSvg(pr.labels).map(pill => (
+                    <Box key={`label-${row.branch}-${pill.label?.name ?? 'more'}`} flexShrink={0}>
+                      <Svg source={pill.source} alt={pill.label?.name ?? pr.labels.map(l => l.name).join(', ')} width={pill.width} height={ROW} />
+                      {pill.label ? (
+                        pill.label.description && (
+                          <Box position="absolute" top={1} right={0} display="none" hover={{ display: 'flex' }} paddingX={1}>
+                            <Text>{pill.label.description}</Text>
+                          </Box>
+                        )
+                      ) : (
+                        <Box
+                          position="absolute"
+                          top={1}
+                          right={0}
+                          display="none"
+                          hover={{ display: 'flex' }}
+                          flexDirection="column"
+                          paddingX={1}
+                        >
+                          <Text dimColor>{pr.labels.length} labels</Text>
+                          {pr.labels.map(label => {
+                            const badge = pillSvg(label)
+                            return (
+                              <Box flexDirection="row" alignItems="center" gap={1}>
+                                <Svg source={badge.source} alt={label.name} width={badge.width} height={badge.height} />
+                                {label.description && <Text dimColor>{label.description}</Text>}
+                              </Box>
+                            )
+                          })}
+                        </Box>
+                      )}
+                    </Box>
+                  ))}
+                </Box>
+              )}
               {diffChars > 0 && (() => {
                 if (!row.diff || row.isTrunk) {
                   const width = Math.ceil(diffChars * DIFF_CHAR) + 2

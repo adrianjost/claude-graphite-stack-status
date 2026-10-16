@@ -24,7 +24,7 @@ export type PrInfo = {
   state: string
   isDraft: boolean
   reviewDecision: string
-  labels: { name: string; color: string }[]
+  labels: { name: string; color: string; description?: string }[]
   ci: CiState
   ciCounts: { pass: number; fail: number; pending: number }
   failing: { name: string; workflow?: string; url?: string }[]
