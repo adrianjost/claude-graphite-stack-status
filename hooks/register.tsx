@@ -518,41 +518,52 @@ function metaLayout(prs: PrInfo[]): MetaLayout {
   }
 }
 
+const REVIEW_TIPS: Record<string, string> = {
+  approved: 'Approved',
+  'changes requested': 'Changes requested',
+  'no reviewers': 'No reviewers requested yet',
+  'waiting for review': 'Waiting for review',
+}
+
 function metaSvg(layout: MetaLayout, pr?: PrInfo) {
   const cy = ROW / 2
   const numberX = layout.hasCi ? CI_ICON + 6 : 0
-  const reviewX = numberX + Math.ceil(layout.numberChars * NUMBER_CHAR) + 7
-  const width = reviewX + ICON + (layout.threadDigits ? 3 + Math.ceil(layout.threadDigits * 6.5) : 0)
-  const parts: string[] = []
+  const leftWidth = numberX + Math.ceil(layout.numberChars * NUMBER_CHAR) + 7
+  const reviewWidth = ICON + (layout.threadDigits ? 3 + Math.ceil(layout.threadDigits * 6.5) : 0)
+  const left: string[] = []
+  const right: string[] = []
   const alt: string[] = []
+  const tip: string[] = []
   if (pr) {
     alt.push(`#${pr.number}`)
     if (pr.ci === 'fail') {
       alt.push('CI failing')
-      parts.push(
+      left.push(
         `<g transform="translate(0 ${cy - CI_ICON / 2})"><circle cx="7" cy="7" r="6.2" fill="${DOT.closed}"/>` +
           `<path d="M4.8 4.8l4.4 4.4M9.2 4.8l-4.4 4.4" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></g>`,
       )
     }
-    parts.push(
+    left.push(
       `<text x="${numberX}" y="${cy}" dy="0.35em" font-size="${NUMBER_FONT}" font-family="${MONO}" fill="${LINE}">#${pr.number}</text>`,
     )
     const review = reviewStatus(pr)
-    if (review.alt) alt.push(review.alt)
-    parts.push(`<g transform="translate(${reviewX} ${cy - ICON / 2})">${review.body}</g>`)
+    const label = REVIEW_TIPS[review.alt]
+    if (label) tip.push(label)
+    right.push(`<g transform="translate(0 ${cy - ICON / 2})">${review.body}</g>`)
     const threads = pr.state === 'OPEN' ? pr.openThreads : 0
     if (threads) {
-      alt.push(`${threads} open conversation${threads === 1 ? '' : 's'}`)
-      parts.push(
-        `<text x="${reviewX + ICON + 2.5}" y="${cy}" dy="0.35em" font-size="10.5" font-weight="600" ` +
+      tip.push(`${threads} unresolved conversation${threads === 1 ? '' : 's'}`)
+      right.push(
+        `<text x="${ICON + 2.5}" y="${cy}" dy="0.35em" font-size="10.5" font-weight="600" ` +
           `font-family="system-ui, -apple-system, sans-serif" fill="${LINE}">${threads}</text>`,
       )
     }
   }
+  const svg = (width: number, parts: string[]) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${ROW}" viewBox="0 0 ${width} ${ROW}">${parts.join('')}</svg>`
   return {
-    alt: alt.join(', ') || 'no pull request',
-    width,
-    source: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${ROW}" viewBox="0 0 ${width} ${ROW}">${parts.join('')}</svg>`,
+    left: { width: leftWidth, alt: alt.join(', ') || 'no pull request', source: svg(leftWidth, left) },
+    review: { width: reviewWidth, alt: tip.join(', ') || 'no review status', tip: tip.join(' · '), source: svg(reviewWidth, right) },
   }
 }
 
@@ -838,35 +849,45 @@ export const register: Register = on => {
           return (
             <Box flexDirection="row" alignItems="center" gap={1}>
               <Svg source={lane.source} alt={row.parent ? `${row.branch} on ${row.parent}` : row.branch} width={lane.width} height={ROW} />
-              <Box key={`meta-${row.branch}`} flexShrink={0}>
-                <Svg source={meta.source} alt={meta.alt} width={meta.width} height={ROW} />
-                {pr?.ci === 'fail' && (
-                  <Box
-                    position="absolute"
-                    top={1}
-                    left={0}
-                    display="none"
-                    hover={{ display: 'flex' }}
-                    flexDirection="column"
-                    paddingX={1}
-                  >
-                    <Box flexDirection="row" gap={1}>
-                      <Text color="error" bold>CI failing</Text>
-                      <Text dimColor>
-                        {pr.ciCounts.fail} of {pr.ciCounts.pass + pr.ciCounts.fail + pr.ciCounts.pending} checks
-                        {pr.ciCounts.pending ? ` · ${pr.ciCounts.pending} still running` : ''}
-                      </Text>
-                    </Box>
-                    {pr.failing.map(check => (
+              <Box flexDirection="row" flexShrink={0}>
+                <Box key={`meta-${row.branch}`} flexShrink={0}>
+                  <Svg source={meta.left.source} alt={meta.left.alt} width={meta.left.width} height={ROW} />
+                  {pr?.ci === 'fail' && (
+                    <Box
+                      position="absolute"
+                      top={1}
+                      left={0}
+                      display="none"
+                      hover={{ display: 'flex' }}
+                      flexDirection="column"
+                      paddingX={1}
+                    >
                       <Box flexDirection="row" gap={1}>
-                        <Text color="error">✕</Text>
-                        {check.url ? <Link href={check.url} label={check.name} /> : <Text>{check.name}</Text>}
-                        {check.workflow && check.workflow !== check.name && <Text dimColor>{check.workflow}</Text>}
+                        <Text color="error" bold>CI failing</Text>
+                        <Text dimColor>
+                          {pr.ciCounts.fail} of {pr.ciCounts.pass + pr.ciCounts.fail + pr.ciCounts.pending} checks
+                          {pr.ciCounts.pending ? ` · ${pr.ciCounts.pending} still running` : ''}
+                        </Text>
                       </Box>
-                    ))}
-                    <Link href={`${pr.url}/checks`} label="All checks on GitHub →" />
-                  </Box>
-                )}
+                      {pr.failing.map(check => (
+                        <Box flexDirection="row" gap={1}>
+                          <Text color="error">✕</Text>
+                          {check.url ? <Link href={check.url} label={check.name} /> : <Text>{check.name}</Text>}
+                          {check.workflow && check.workflow !== check.name && <Text dimColor>{check.workflow}</Text>}
+                        </Box>
+                      ))}
+                      <Link href={`${pr.url}/checks`} label="All checks on GitHub →" />
+                    </Box>
+                  )}
+                </Box>
+                <Box key={`review-${row.branch}`} flexShrink={0}>
+                  <Svg source={meta.review.source} alt={meta.review.alt} width={meta.review.width} height={ROW} />
+                  {meta.review.tip && (
+                    <Box position="absolute" top={1} left={0} display="none" hover={{ display: 'flex' }} paddingX={1}>
+                      <Text>{meta.review.tip}</Text>
+                    </Box>
+                  )}
+                </Box>
               </Box>
               <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
                 {pr ? (
