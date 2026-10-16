@@ -1,9 +1,29 @@
 export type LinkTarget = 'github' | 'graphite'
 
+export type DiffFile = {
+  path: string
+  added: number
+  removed: number
+  hunks: string
+  isTooLarge: boolean
+  isBinary: boolean
+  isNew: boolean
+  isGenerated: boolean
+}
+
 export type DiffView = {
+  branch: string
+  parent: string
+  trunk: string
+  compareTo: 'parent' | 'trunk'
+  showWhitespace: boolean
   title: string
   url?: string
-  files: { path: string; added: number; removed: number; hunks: string; isTooLarge: boolean; isBinary: boolean; isNew: boolean }[]
+  root: string
+  headSha?: string
+  commits: { sha: string; subject: string }[]
+  files: DiffFile[]
+  collapsed: string[]
   isLoading: boolean
   error?: string
 }

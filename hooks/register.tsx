@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface as Engine, Register, Timer } from 'claude-code'
 
-import type { CiState, DiffView, Issue, Lane, LinkTarget, PrInfo, StackRow, StackSnapshot } from '../types'
+import type { CiState, DiffFile, DiffView, Issue, Lane, LinkTarget, PrInfo, StackRow, StackSnapshot } from '../types'
 
 const POLL_MS = 60_000
 const MIN_GAP_MS = 15_000
@@ -10,6 +10,7 @@ const snapshot = atom({ plugin: 'graphite-stack', key: 'snapshot' } as const, EM
 const isHidden = atom({ plugin: 'graphite-stack', key: 'isHidden' } as const, false)
 const DIFF_PANE = 'graphite-stack-diff'
 const DIFF_MAX_CHARS = 90_000
+const DIFF_DRAW_BUDGET = 95_000
 const diffView = atom({ plugin: 'graphite-stack', key: 'diffView' } as const, null as DiffView | null)
 const linkTarget = atom({ plugin: 'graphite-stack', key: 'linkTarget' } as const, 'github' as LinkTarget)
 
@@ -241,9 +242,11 @@ const LANGUAGES: Record<string, string> = {
 
 const languageOf = (path: string) => LANGUAGES[path.split('.').pop()?.toLowerCase() ?? '']
 
-function parseDiff(out: string): DiffView['files'] {
-  const files: DiffView['files'] = []
-  let budget = DIFF_MAX_CHARS
+const GENERATED =
+  /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|Cargo\.lock|go\.sum|poetry\.lock|composer\.lock|Gemfile\.lock)$|\.gen(\.[^/]*)?$|\.min\.(js|css)$|\.snap$|(^|\/)(generated|__generated__|insurance-tables)\//
+
+function parseDiff(out: string): DiffFile[] {
+  const files: DiffFile[] = []
   for (const chunk of out.split(/^diff --git /m).slice(1)) {
     const lines = chunk.split('\n')
     const target = lines.find(line => line.startsWith('+++ '))?.slice(4)
@@ -265,25 +268,93 @@ function parseDiff(out: string): DiffView['files'] {
           .map(line => line.slice(1))
           .join('\n')
       : hunks
-    const isTooLarge = body.length > budget
-    if (!isTooLarge) budget -= body.length
-    files.push({ path, added, removed, hunks: isTooLarge ? '' : body, isTooLarge, isBinary: start < 0, isNew })
+    const isTooLarge = body.length > DIFF_MAX_CHARS
+    files.push({
+      path,
+      added,
+      removed,
+      hunks: isTooLarge ? '' : body,
+      isTooLarge,
+      isBinary: start < 0,
+      isNew,
+      isGenerated: GENERATED.test(path),
+    })
   }
   return files
 }
 
-async function openDiff($: Engine, row: StackRow) {
-  if (!row.parent) return
-  const title = row.pr ? `#${row.pr.number} ${row.pr.title}` : row.branch
-  await update($, diffView, () => ({ title, url: row.pr?.url, files: [], isLoading: true }))
-  void $.ui.open({ id: DIFF_PANE, title: row.pr ? `#${row.pr.number} changes` : 'Branch changes' })
+type DiffTarget = Pick<DiffView, 'branch' | 'parent' | 'trunk' | 'compareTo' | 'showWhitespace' | 'title' | 'url'>
+
+async function loadDiff($: Engine, target: DiffTarget, keepCollapsed?: string[]) {
+  await update($, diffView, view => ({
+    ...target,
+    root: view?.root ?? '',
+    commits: view?.branch === target.branch ? view.commits : [],
+    files: view?.branch === target.branch ? view.files : [],
+    collapsed: view?.collapsed ?? [],
+    isLoading: true,
+  }))
   const cwd = await $.session.cwd()
-  const out = await run($, cwd, ['git', 'diff', '-w', '--no-color', '--no-ext-diff', `${row.parent}...${row.branch}`])
-  await update($, diffView, () =>
-    out === undefined
-      ? { title, url: row.pr?.url, files: [], isLoading: false, error: `git diff ${row.parent}...${row.branch} failed` }
-      : { title, url: row.pr?.url, files: parseDiff(out), isLoading: false },
+  const base = target.compareTo === 'trunk' ? target.trunk : target.parent
+  const [out, log, head, root] = await Promise.all([
+    run($, cwd, ['git', 'diff', ...(target.showWhitespace ? [] : ['-w']), '--no-color', '--no-ext-diff', `${base}...${target.branch}`]),
+    run($, cwd, ['git', 'log', '--format=%h%x09%s', `${base}..${target.branch}`]),
+    run($, cwd, ['git', 'rev-parse', target.branch]),
+    run($, cwd, ['git', 'rev-parse', '--show-toplevel']),
+  ])
+  const files = out === undefined ? [] : parseDiff(out)
+  const paths = new Set(files.map(file => file.path))
+  await update($, diffView, () => ({
+    ...target,
+    root: root ?? '',
+    headSha: head,
+    commits: (log ?? '')
+      .split('\n')
+      .filter(Boolean)
+      .map(line => {
+        const [sha = '', ...subject] = line.split('\t')
+        return { sha, subject: subject.join('\t') }
+      }),
+    files,
+    collapsed: keepCollapsed
+      ? keepCollapsed.filter(path => paths.has(path))
+      : files.filter(file => file.isGenerated).map(file => file.path),
+    isLoading: false,
+    error: out === undefined ? `git diff ${base}...${target.branch} failed` : undefined,
+  }))
+}
+
+function stackOrder(rows: StackRow[]) {
+  return [...rows].reverse().filter(row => !row.isTrunk && row.parent)
+}
+
+async function openDiff($: Engine, row: StackRow, options?: Partial<Pick<DiffView, 'compareTo' | 'showWhitespace'>>) {
+  if (!row.parent) return
+  const [view, s] = await Promise.all([read($, diffView), read($, snapshot)])
+  const trunk = s.rows.find(r => r.isTrunk)?.branch ?? row.parent
+  const isSame = view?.branch === row.branch
+  void $.ui.open({ id: DIFF_PANE, title: row.pr ? `#${row.pr.number} changes` : 'Branch changes' })
+  await loadDiff(
+    $,
+    {
+      branch: row.branch,
+      parent: row.parent,
+      trunk,
+      compareTo: options?.compareTo ?? view?.compareTo ?? 'parent',
+      showWhitespace: options?.showWhitespace ?? view?.showWhitespace ?? false,
+      title: row.pr ? `#${row.pr.number} ${row.pr.title}` : row.branch,
+      url: row.pr?.url,
+    },
+    isSame && options ? view?.collapsed : undefined,
   )
+}
+
+async function refreshDiff($: Engine) {
+  const view = await read($, diffView)
+  if (!view || view.isLoading) return
+  const cwd = await $.session.cwd()
+  const head = await run($, cwd, ['git', 'rev-parse', view.branch])
+  if (head && head !== view.headSha) await loadDiff($, view, view.collapsed)
 }
 
 async function readMetadata($: Engine, cwd: string, gitDir: string) {
@@ -440,6 +511,7 @@ async function refresh($: Engine) {
       issue,
       isLoading: false,
     }))
+    void refreshDiff($)
     const failing = rows.filter(r => r.pr?.ci === 'fail').length
     $.ui.status(failing ? `stack: ${failing} PR${failing > 1 ? 's' : ''} failing CI` : undefined)
   } catch (error) {
@@ -718,45 +790,174 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: DIFF_PANE }, async ($, e) => {
-    const { Box, Text, Link, Code } = $.ui.resolve(e)
+    const elements = $.ui.resolve(e)
+    if (!('Select' in elements)) return <elements.Text dimColor>The diff view needs the Claude Code desktop app.</elements.Text>
+    const { Box, Text, Link, Code, Button, Select } = elements
     const view = await read($, diffView)
-    if (!view) return <Text dimColor>Click a branch's line counts to see its changes.</Text>
+    if (!view) return <Text dimColor>Hover a branch's line counts and click View diff to see its changes.</Text>
+    const order = stackOrder((await read($, snapshot)).rows)
+    const at = order.findIndex(row => row.branch === view.branch)
+    const previous = at > 0 ? order[at - 1] : undefined
+    const following = at >= 0 ? order[at + 1] : undefined
     const added = view.files.reduce((sum, file) => sum + file.added, 0)
     const removed = view.files.reduce((sum, file) => sum + file.removed, 0)
+    const collapsed = new Set(view.collapsed)
+    const setCollapsed = (paths: string[]) => void update($, diffView, v => (v ? { ...v, collapsed: paths } : v))
+    const toggle = (path: string) =>
+      setCollapsed(collapsed.has(path) ? view.collapsed.filter(p => p !== path) : [...view.collapsed, path])
+    const base = view.compareTo === 'trunk' ? view.trunk : view.parent
+    let budget = DIFF_DRAW_BUDGET
 
     return (
       <Box flexDirection="column" gap={1}>
         <Box flexDirection="column">
-          <Text bold wrap="truncate-end">{view.title}</Text>
+          <Box flexDirection="row" alignItems="center" gap={1}>
+            {previous && (
+              <Box flexShrink={0}>
+                <Button key="diff-previous" plain label="◀" onPress={() => void openDiff($, previous)} />
+              </Box>
+            )}
+            <Box flexGrow={1} flexShrink={1} minWidth={0}>
+              <Text bold wrap="truncate-end">{view.title}</Text>
+            </Box>
+            {following && (
+              <Box flexShrink={0}>
+                <Button key="diff-next" plain label="▶" onPress={() => void openDiff($, following)} />
+              </Box>
+            )}
+          </Box>
           <Text dimColor>
             {view.isLoading
               ? 'loading…'
-              : `${view.files.length} file${view.files.length === 1 ? '' : 's'} · +${added} −${removed} · whitespace ignored`}
+              : `${view.files.length} file${view.files.length === 1 ? '' : 's'} · +${added} −${removed} · ` +
+                `${view.commits.length} commit${view.commits.length === 1 ? '' : 's'} · ` +
+                `${at + 1} of ${order.length} in the stack`}
           </Text>
         </Box>
+        <Box flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
+          <Select
+            key="diff-compare"
+            label="Compare to"
+            value={view.compareTo}
+            options={[
+              { value: 'parent', label: `parent (${view.parent})` },
+              { value: 'trunk', label: view.trunk },
+            ]}
+            onSelect={value => {
+              const row = order[at]
+              if (row) void openDiff($, row, { compareTo: value === 'trunk' ? 'trunk' : 'parent' })
+            }}
+          />
+          <Select
+            key="diff-whitespace"
+            label="Whitespace"
+            value={view.showWhitespace ? 'shown' : 'ignored'}
+            options={[
+              { value: 'ignored', label: 'ignored' },
+              { value: 'shown', label: 'shown' },
+            ]}
+            onSelect={value => {
+              const row = order[at]
+              if (row) void openDiff($, row, { showWhitespace: value === 'shown' })
+            }}
+          />
+          <Button key="diff-expand-all" plain label="Expand all" onPress={() => setCollapsed([])} />
+          <Button key="diff-collapse-all" plain label="Collapse all" onPress={() => setCollapsed(view.files.map(f => f.path))} />
+        </Box>
         {view.error && <Text color="error">{view.error}</Text>}
-        {view.files.map(file => (
-          <Box key={`file-${file.path}`} flexDirection="column">
-            <Box flexDirection="row" gap={1}>
-              <Text bold wrap="truncate-start">{file.path}</Text>
-              {file.isNew && <Text color="success">new</Text>}
-              <Text color="success">+{file.added}</Text>
-              <Text color="error">−{file.removed}</Text>
-            </Box>
-            {file.isBinary ? (
-              <Text dimColor>binary file</Text>
-            ) : file.isTooLarge ? (
+        {view.commits.length > 0 && (
+          <Box flexDirection="column">
+            <Text dimColor>Commits since {base}</Text>
+            {view.commits.map(commit => (
               <Box flexDirection="row" gap={1}>
-                <Text dimColor>too large to show here</Text>
-                {view.url && <Link href={`${view.url}/files`} label="open on GitHub" />}
+                <Text dimColor>{commit.sha}</Text>
+                <Text wrap="truncate-end">{commit.subject}</Text>
               </Box>
-            ) : file.isNew ? (
-              file.hunks && <Code source={file.hunks} language={languageOf(file.path)} path={file.path} startLine={1} />
-            ) : (
-              file.hunks && <Code source={file.hunks} format="diff" language={languageOf(file.path)} path={file.path} />
-            )}
+            ))}
           </Box>
-        ))}
+        )}
+        {view.files.length > 1 && (
+          <Box flexDirection="column">
+            <Text dimColor>Files</Text>
+            {view.files.map((file, i) => (
+              <Box flexDirection="row" gap={1}>
+                <Box flexGrow={1} flexShrink={1} minWidth={0}>
+                  <Button
+                    key={`jump-${i}`}
+                    plain
+                    dimColor={file.isGenerated}
+                    label={file.path}
+                    onPress={() => {
+                      if (collapsed.has(file.path)) toggle(file.path)
+                      void $.ui.scroll({ in: DIFF_PANE, to: { key: `file-${i}` } })
+                    }}
+                  />
+                </Box>
+                <Text color="success">+{file.added}</Text>
+                <Text color="error">−{file.removed}</Text>
+              </Box>
+            ))}
+          </Box>
+        )}
+        {view.files.map((file, i) => {
+          const isOpen = !collapsed.has(file.path)
+          const size = file.hunks.length
+          const fits = size <= budget
+          if (isOpen && fits) budget -= size
+          return (
+            <Box key={`file-${i}`} flexDirection="column">
+              <Box flexDirection="row" alignItems="center" gap={1}>
+                <Box flexShrink={0}>
+                  <Button key={`toggle-${i}`} plain label={isOpen ? '▾' : '▸'} onPress={() => toggle(file.path)} />
+                </Box>
+                <Box flexShrink={1} minWidth={0}>
+                  {view.root ? (
+                    <Link href={`file://${view.root}/${file.path}`}>
+                      <Text bold wrap="truncate-start">{file.path}</Text>
+                    </Link>
+                  ) : (
+                    <Text bold wrap="truncate-start">{file.path}</Text>
+                  )}
+                </Box>
+                {file.isNew && <Text color="success">new</Text>}
+                {file.isGenerated && <Text dimColor>generated</Text>}
+                <Text color="success">+{file.added}</Text>
+                <Text color="error">−{file.removed}</Text>
+                <Box flexGrow={1} />
+                <Box flexShrink={0}>
+                  <Button
+                    key={`ask-${i}`}
+                    plain
+                    dimColor
+                    label="Ask Claude"
+                    onPress={() =>
+                      void $.prompt.submit({
+                        text:
+                          `Review the changes to \`${file.path}\` in ${view.title} (branch \`${view.branch}\`, compared to \`${base}\`). ` +
+                          'Explain what changed, and point out bugs, risks or anything unclear.',
+                        asUser: true,
+                      })
+                    }
+                  />
+                </Box>
+              </Box>
+              {!isOpen ? null : file.isBinary ? (
+                <Text dimColor>binary file</Text>
+              ) : file.isTooLarge || !fits ? (
+                <Box flexDirection="row" gap={1}>
+                  <Text dimColor>
+                    {file.isTooLarge ? 'too large to show here' : 'collapse other files to show this one'}
+                  </Text>
+                  {view.url && <Link href={`${view.url}/files`} label="open on GitHub" />}
+                </Box>
+              ) : file.isNew ? (
+                file.hunks && <Code source={file.hunks} language={languageOf(file.path)} path={file.path} startLine={1} />
+              ) : (
+                file.hunks && <Code source={file.hunks} format="diff" language={languageOf(file.path)} path={file.path} />
+              )}
+            </Box>
+          )
+        })}
       </Box>
     )
   })
@@ -805,6 +1006,21 @@ export const register: Register = on => {
               void update($, linkTarget, () => target)
               void $.store.set('linkTarget', target)
             }}
+          />
+          <Button
+            key="sync"
+            plain
+            dimColor
+            label="Sync with main"
+            onPress={() =>
+              void $.prompt.submit({
+                text:
+                  'Bring my Graphite stack up to date with the latest origin/main: run `gt sync` (accept updating trunk and ' +
+                  'deleting merged branches), then `gt restack` to rebase every branch of the stack onto it, resolving any ' +
+                  "conflicts. Switch back to the branch I was on afterwards, don't push anything, and tell me what changed.",
+                asUser: true,
+              })
+            }
           />
           <Button key="refresh" plain dimColor hotkey="r" label="Refresh" onPress={() => void refresh($)} />
           <Button key="hide" plain dimColor hotkey="h" label="Hide" onPress={() => void update($, isHidden, () => true)} />
@@ -899,8 +1115,9 @@ export const register: Register = on => {
                     onPress={() =>
                       void $.prompt.submit({
                         text:
-                          `Restack the Graphite branch \`${row.branch}\` onto its parent \`${row.parent ?? 'trunk'}\` ` +
-                          '(check it out, run `gt restack`, resolve any conflicts), then switch back to the branch I was on.',
+                          `Restack the Graphite branch \`${row.branch}\` onto the latest origin/main: run \`gt sync\` first ` +
+                          '(accept updating trunk and deleting merged branches), then check the branch out, run `gt restack` and ' +
+                          'resolve any conflicts. Switch back to the branch I was on afterwards, and don\'t push anything.',
                         asUser: true,
                       })
                     }

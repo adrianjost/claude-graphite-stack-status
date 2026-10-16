@@ -44,6 +44,21 @@ The band appears on its own whenever the session's branch belongs to a Graphite 
 - `/stack` shows or hides it
 - click the band, then press `R` to refresh or `H` to hide
 
+## Diff pane
+
+Hover a branch's line counts and click **View diff** to open its changes in a side pane:
+
+- **Overview:** the branch's commits and a file list. Click a file to jump to it.
+- **Collapsible files:** fold files one by one, or use **Expand all** / **Collapse all**. Lockfiles and generated files start collapsed.
+- **Stack navigation:** ◀ / ▶ step through the stack's PRs in order.
+- **Options:** compare against the parent branch or trunk, and ignore or show whitespace changes.
+- **Ask Claude:** each file has a button to have Claude review or explain its changes.
+- **Live:** the diff reloads when the branch changes, for example after a restack.
+
+## Keeping the stack current
+
+**Sync with main** in the band's header asks Claude to run `gt sync` and `gt restack`, so the whole stack is based on the latest `origin/main`. A branch's **↻ restack** button does the same for that branch. Neither pushes anything.
+
 ## Settings
 
 Pick where clicking a PR title opens it with the **Links** picker in the band's header: GitHub (default) or Graphite. The choice is remembered across sessions.
