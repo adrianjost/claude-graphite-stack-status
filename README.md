@@ -18,7 +18,7 @@ One row per branch, drawn as the same tree `gt log` draws, from the branch above
 | **Badges** | the PR's GitHub labels, in their colors; hover one for its description; when they don't fit, `+N` shows the rest on hover |
 | **+12 −3** | lines added and removed against the parent branch, ignoring whitespace; hover and click **View diff** to see the diff in a side pane |
 
-The title links to the PR. The band refreshes every minute and after Claude runs `git`, `gh` or `gt`. When any PR fails CI, the status line says so.
+The title links to the PR. GitHub data refreshes every minute, every 30 seconds while CI is running, and every 5 minutes after 10 quiet minutes. It also refreshes right after Claude runs `git push`, `gt submit`, `gt sync` or `gh pr …`. Other `git`/`gt` commands only re-read the local stack. Sessions on the same repo share results, and polling pauses while no app window shows the session. When any PR fails CI, the status line says so.
 
 ## Install
 

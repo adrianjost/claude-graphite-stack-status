@@ -78,6 +78,7 @@ export type StackSnapshot = {
   updatedAt: number
   isStale?: boolean
   issue?: Issue
+  githubIssue?: Issue
   isLoading: boolean
 }
 

@@ -4,7 +4,13 @@ import type { EngineInterface as Engine, Register, Timer } from 'claude-code'
 import type { CiState, DiffFile, DiffView, Issue, Lane, LinkTarget, PrInfo, StackRow, StackSnapshot } from '../types'
 
 const POLL_MS = 60_000
+const POLL_BUSY_MS = 30_000
+const POLL_QUIET_MS = 5 * 60_000
+const QUIET_AFTER_MS = 10 * 60_000
 const MIN_GAP_MS = 15_000
+const LOCAL_DELAY_MS = 1_500
+const SHARED_CACHE_MS = 55_000
+const GITHUB_COMMAND = /\b(git\s+push|gt\s+(submit|ss|sync|merge|get|land|repo\s+sync)|gh\s+pr)\b/
 const EMPTY: StackSnapshot = { branch: '', rows: [], columns: 1, updatedAt: 0, isLoading: false }
 const snapshot = atom({ plugin: 'graphite-stack', key: 'snapshot' } as const, EMPTY)
 const isHidden = atom({ plugin: 'graphite-stack', key: 'isHidden' } as const, false)
@@ -64,9 +70,17 @@ const PR_FIELDS =
   '... on StatusContext{context state targetUrl}}}}}}}'
 
 let isRefreshing = false
-let isQueued = false
-let lastRefreshAt = 0
+type Mode = 'local' | 'github' | 'force'
+const RANK: Record<Mode, number> = { local: 0, github: 1, force: 2 }
+const stronger = (a: Mode | undefined, b: Mode) => (a && RANK[a] >= RANK[b] ? a : b)
+let lastGithubAt = 0
+let lastChangeAt = Date.now()
 let scheduled: Timer | undefined
+let pendingMode: Mode | undefined
+let queuedMode: Mode | undefined
+let pollTimer: Timer | undefined
+const attachedClients = new Set<string>()
+let hasSeenAttach = false
 
 class Problem extends Error {
   constructor(readonly issue: Issue) {
@@ -223,11 +237,20 @@ function toPrInfo(pr: GqlPr): PrInfo {
   }
 }
 
-async function loadPrs($: Engine, cwd: string, branches: string[]) {
+type SharedCache = Record<string, { at: number; pr: PrInfo | null }>
+
+async function loadPrs($: Engine, cwd: string, branches: string[], force: boolean) {
   const prs = new Map<string, PrInfo | undefined>()
   if (!branches.length) return prs
   const repo = await githubRepo($, cwd)
   if (!repo) throw new GitHubError('origin is not a GitHub repository')
+  const cacheKey = `prs:${repo.owner}/${repo.name}`
+  const cache = ((await $.store.get(cacheKey)) ?? {}) as SharedCache
+  const now = Date.now()
+  if (!force && branches.every(branch => now - (cache[branch]?.at ?? 0) < SHARED_CACHE_MS)) {
+    for (const branch of branches) prs.set(branch, cache[branch]?.pr ?? undefined)
+    return prs
+  }
   const fields = branches.map(
     (branch, i) =>
       `b${i}:pullRequests(headRefName:${JSON.stringify(branch)},first:1,orderBy:{field:CREATED_AT,direction:DESC}){nodes{${PR_FIELDS}}}`,
@@ -238,10 +261,15 @@ async function loadPrs($: Engine, cwd: string, branches: string[]) {
   const data = JSON.parse(result.stdout) as { data?: { repository?: Record<string, { nodes: GqlPr[] } | null> } }
   const found = data.data?.repository
   if (!found) throw new GitHubError('unexpected GitHub response')
+  const fresh: SharedCache = {}
+  for (const [branch, entry] of Object.entries(cache)) if (now - entry.at < 60 * 60_000) fresh[branch] = entry
   branches.forEach((branch, i) => {
-    const pr = found[`b${i}`]?.nodes[0]
-    prs.set(branch, pr ? toPrInfo(pr) : undefined)
+    const node = found[`b${i}`]?.nodes[0]
+    const pr = node ? toPrInfo(node) : undefined
+    prs.set(branch, pr)
+    fresh[branch] = { at: now, pr: pr ?? null }
   })
+  await $.store.set(cacheKey, fresh)
   return prs
 }
 
@@ -462,23 +490,47 @@ async function buildRows(
   return { rows, columns, detached }
 }
 
-function requestRefresh($: Engine) {
+function requestRefresh($: Engine, mode: Mode) {
+  pendingMode = stronger(pendingMode, mode)
   if (scheduled) return
-  const wait = lastRefreshAt + MIN_GAP_MS - Date.now()
-  if (wait <= 0) return void refresh($)
-  scheduled = $.clock.after(wait, () => {
+  const wait = pendingMode === 'local' ? LOCAL_DELAY_MS : Math.max(0, lastGithubAt + MIN_GAP_MS - Date.now())
+  scheduled = $.clock.after(Math.max(1, wait), () => {
     scheduled = undefined
-    void refresh($)
+    const run = pendingMode ?? 'local'
+    pendingMode = undefined
+    void refresh($, run)
   })
 }
 
-async function refresh($: Engine) {
+const isPaused = () => hasSeenAttach && attachedClients.size === 0
+
+async function pollDelay($: Engine) {
+  const rows = (await read($, snapshot)).rows
+  if (rows.some(row => row.pr?.state === 'OPEN' && row.pr.ciCounts.pending > 0)) return POLL_BUSY_MS
+  return Date.now() - lastChangeAt > QUIET_AFTER_MS ? POLL_QUIET_MS : POLL_MS
+}
+
+async function schedulePoll($: Engine) {
+  pollTimer?.cancel()
+  pollTimer = $.clock.after(await pollDelay($), () => {
+    void (async () => {
+      if (!isPaused() && !(await read($, isHidden))) requestRefresh($, 'github')
+      await schedulePoll($)
+    })()
+  })
+}
+
+async function refresh($: Engine, mode: Mode) {
   if (isRefreshing) {
-    isQueued = true
+    queuedMode = stronger(queuedMode, mode)
     return
   }
+  if (mode === 'github' && Date.now() - lastGithubAt < MIN_GAP_MS) {
+    requestRefresh($, 'github')
+    mode = 'local'
+  }
   isRefreshing = true
-  lastRefreshAt = Date.now()
+  if (mode !== 'local') lastGithubAt = Date.now()
   try {
     const cwd = await $.session.cwd()
     const branch = (await run($, cwd, ['git', 'branch', '--show-current'])) ?? ''
@@ -489,18 +541,31 @@ async function refresh($: Engine) {
       return
     }
 
-    const previous = new Map((await read($, snapshot)).rows.map(row => [row.branch, row.pr]))
-    const lastUpdate = (await read($, snapshot)).updatedAt
-    let issue: Issue | undefined
-    const prs = await loadPrs(
-      $,
-      cwd,
-      built.rows.filter(row => !row.isTrunk).map(row => row.branch),
-    ).catch(error => {
-      issue = githubIssue(error, lastUpdate)
-      return undefined
-    })
-    const isStale = !prs
+    const before = await read($, snapshot)
+    const previous = new Map(before.rows.map(row => [row.branch, row.pr]))
+    let ghIssue = before.githubIssue
+    const prs =
+      mode === 'local'
+        ? undefined
+        : await loadPrs(
+            $,
+            cwd,
+            built.rows.filter(row => !row.isTrunk).map(row => row.branch),
+            mode === 'force',
+          ).then(
+            result => {
+              ghIssue = undefined
+              return result
+            },
+            error => {
+              ghIssue = githubIssue(error, before.updatedAt)
+              return undefined
+            },
+          )
+    const isStale = mode === 'local' ? !!before.isStale : !prs
+    if (prs && [...prs].some(([branch, pr]) => JSON.stringify(pr) !== JSON.stringify(previous.get(branch)))) {
+      lastChangeAt = Date.now()
+    }
     const rows = await Promise.all(
       built.rows.map(async row => {
         if (row.isTrunk) return row
@@ -522,9 +587,10 @@ async function refresh($: Engine) {
       branch,
       rows,
       columns: built.columns,
-      updatedAt: isStale ? s.updatedAt : Date.now(),
+      updatedAt: prs ? Date.now() : s.updatedAt,
       isStale,
-      issue: issue ?? (built.detached ? detachedIssue(built.detached, built.rows.find(row => row.isTrunk)?.branch ?? 'main') : undefined),
+      githubIssue: ghIssue,
+      issue: ghIssue ?? (built.detached ? detachedIssue(built.detached, built.rows.find(row => row.isTrunk)?.branch ?? 'main') : undefined),
       isLoading: false,
     }))
     void refreshDiff($)
@@ -536,9 +602,10 @@ async function refresh($: Engine) {
     await update($, snapshot, s => ({ ...s, rows: error instanceof Problem ? [] : s.rows, issue, isLoading: false }))
   } finally {
     isRefreshing = false
-    if (isQueued) {
-      isQueued = false
-      void refresh($)
+    if (queuedMode) {
+      const next = queuedMode
+      queuedMode = undefined
+      void refresh($, next)
     }
   }
 }
@@ -781,26 +848,38 @@ export const register: Register = on => {
       name: 'stack',
       description: 'Show or hide the Graphite stack above the prompt',
     })
-    $.clock.every(POLL_MS, () => {
-      void read($, isHidden).then(hidden => {
-        if (!hidden) requestRefresh($)
-      })
-    })
-    void refresh($)
+    void refresh($, 'github').then(() => schedulePoll($))
 
     return started
   })
 
   on('command.run', { command: 'stack' }, async $ => {
     const hidden = await update($, isHidden, h => !h)
-    if (!hidden) void refresh($)
+    if (!hidden) void refresh($, 'force')
 
     return { text: hidden ? 'Graphite stack hidden.' : 'Graphite stack shown.' }
   })
 
+  on('session.attach', async ($, e, next) => {
+    if (e.surface !== 'terminal') {
+      const wasPaused = isPaused()
+      hasSeenAttach = true
+      attachedClients.add(e.clientId)
+      if (wasPaused) requestRefresh($, 'github')
+    }
+    return next(e)
+  })
+
+  on('session.detach', async ($, e, next) => {
+    if (e.surface !== 'terminal') hasSeenAttach = true
+    attachedClients.delete(e.clientId)
+    return next(e)
+  })
+
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const ran = await next(e)
-    if (/\b(gt|gh|git)\s/.test(e.command)) requestRefresh($)
+    if (GITHUB_COMMAND.test(e.command)) requestRefresh($, 'force')
+    else if (/\b(gt|git)\s/.test(e.command)) requestRefresh($, 'local')
 
     return ran
   })
@@ -1038,7 +1117,7 @@ export const register: Register = on => {
               })
             }
           />
-          <Button key="refresh" plain dimColor hotkey="r" label="Refresh" onPress={() => void refresh($)} />
+          <Button key="refresh" plain dimColor hotkey="r" label="Refresh" onPress={() => void refresh($, 'force')} />
           <Button key="hide" plain dimColor hotkey="h" label="Hide" onPress={() => void update($, isHidden, () => true)} />
         </Box>
         {s.issue && (
