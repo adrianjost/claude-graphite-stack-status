@@ -462,26 +462,41 @@ async function buildRows(
     (JSON.parse(meta.get(name)?.children ?? '[]') as string[]).filter(child => meta.has(child))
   const rows: StackRow[] = []
   let columns = 1
-  const layout = (name: string, col: number, open: number[], parent?: string) => {
+  const layout = (name: string, col: number, open: number[], openOwners: string[], parent?: string) => {
     const children = childrenOf(name)
     children.forEach((child, i) => {
-      layout(child, col + i, [...open, ...children.slice(0, i).map((_, k) => col + k)], name)
+      layout(
+        child,
+        col + i,
+        [...open, ...children.slice(0, i).map((_, k) => col + k)],
+        [...openOwners, ...children.slice(0, i)],
+        name,
+      )
     })
     const corners = children.slice(1).map((_, i) => col + i + 1)
     columns = Math.max(columns, col + 1, ...corners.map(c => c + 1))
     rows.push({
       branch: name,
       parent,
-      lane: { col, up: children.length > 0, down: true, pipes: open, corners },
+      lane: {
+        col,
+        up: children.length > 0,
+        down: true,
+        pipes: open,
+        corners,
+        pipeOwners: openOwners,
+        cornerOwners: children.slice(1),
+        upOwner: children[0],
+      },
       isCurrent: name === branch,
       isTrunk: false,
       needsRestack: false,
     })
   }
-  layout(root, 0, [], trunk)
+  layout(root, 0, [], [], trunk)
   rows.push({
     branch: trunk,
-    lane: { col: 0, up: true, down: false, pipes: [], corners: [] },
+    lane: { col: 0, up: true, down: false, pipes: [], corners: [], upOwner: root },
     isCurrent: false,
     isTrunk: true,
     needsRestack: false,
@@ -744,21 +759,25 @@ function diffSvg(diff: { added: number; removed: number }, chars: number) {
 const esc = (text: string) =>
   text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
-function laneSvg(lane: Lane, columns: number, color?: string) {
+function laneSvg(lane: Lane, columns: number, branch: string, color?: string, isBehind = (_: string) => false) {
   const x = (c: number) => COL / 2 + c * COL
   const cy = ROW / 2
-  const stroke = `stroke="${LINE}" stroke-width="${STROKE}" stroke-opacity="0.7" fill="none" stroke-linecap="round"`
+  const base = `stroke="${LINE}" stroke-width="${STROKE}" fill="none" stroke-linecap="round"`
+  const solid = `${base} stroke-opacity="0.7"`
+  const dotted = `${base} stroke-opacity="0.9" stroke-dasharray="0.01 3.5"`
+  const style = (owner?: string) => (owner && isBehind(owner) ? dotted : solid)
   const parts: string[] = []
-  for (const c of lane.pipes) parts.push(`<line x1="${x(c)}" y1="0" x2="${x(c)}" y2="${ROW}" ${stroke}/>`)
-  if (lane.up) parts.push(`<line x1="${x(lane.col)}" y1="0" x2="${x(lane.col)}" y2="${cy - R - GAP}" ${stroke}/>`)
-  if (lane.down) parts.push(`<line x1="${x(lane.col)}" y1="${cy + R + GAP}" x2="${x(lane.col)}" y2="${ROW}" ${stroke}/>`)
-  const far = Math.max(...lane.corners, -1)
-  if (far >= 0) {
-    parts.push(`<line x1="${x(lane.col) + R + GAP}" y1="${cy}" x2="${x(far) - CURVE}" y2="${cy}" ${stroke}/>`)
-    for (const c of lane.corners) {
-      parts.push(`<path d="M${x(c)} 0 V${cy - CURVE} Q${x(c)} ${cy} ${x(c) - CURVE} ${cy}" ${stroke}/>`)
-    }
-  }
+  lane.pipes.forEach((c, i) => parts.push(`<line x1="${x(c)}" y1="0" x2="${x(c)}" y2="${ROW}" ${style(lane.pipeOwners?.[i])}/>`))
+  if (lane.up) parts.push(`<line x1="${x(lane.col)}" y1="0" x2="${x(lane.col)}" y2="${cy - R - GAP}" ${style(lane.upOwner)}/>`)
+  if (lane.down) parts.push(`<line x1="${x(lane.col)}" y1="${cy + R + GAP}" x2="${x(lane.col)}" y2="${ROW}" ${style(branch)}/>`)
+  let from = x(lane.col) + R + GAP
+  lane.corners.forEach((c, i) => {
+    const owners = (lane.cornerOwners ?? []).slice(i)
+    const shared = owners.length > 0 && owners.every(owner => isBehind(owner)) ? dotted : solid
+    if (x(c) - CURVE > from) parts.push(`<line x1="${from}" y1="${cy}" x2="${x(c) - CURVE}" y2="${cy}" ${shared}/>`)
+    from = x(c) - CURVE
+    parts.push(`<path d="M${x(c)} 0 V${cy - CURVE} Q${x(c)} ${cy} ${x(c) - CURVE} ${cy}" ${style(lane.cornerOwners?.[i])}/>`)
+  })
   parts.push(
     color
       ? `<circle cx="${x(lane.col)}" cy="${cy}" r="${R}" fill="${color}"/>`
@@ -1067,6 +1086,7 @@ export const register: Register = on => {
     const { Box, Text, Button, Link, Svg, Select } = elements
 
     const links = await read($, linkTarget)
+    const behind = new Set(s.rows.filter(row => row.needsRestack).map(row => row.branch))
     const prUrl = (pr: PrInfo) => (links === 'graphite' ? graphiteUrl(pr) : pr.url)
     const prs = s.rows.filter(row => row.pr)
     const failing = prs.filter(row => row.pr?.ci === 'fail').length
@@ -1148,7 +1168,7 @@ export const register: Register = on => {
         )}
         {s.rows.map(row => {
           const pr = row.pr
-          const lane = laneSvg(row.lane, s.columns, pr ? prDot(pr) : undefined)
+          const lane = laneSvg(row.lane, s.columns, row.branch, pr ? prDot(pr) : undefined, owner => behind.has(owner))
           const meta = metaSvg(layout, pr)
 
           return (

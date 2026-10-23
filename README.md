@@ -14,7 +14,7 @@ One row per branch, drawn as the same tree `gt log` draws, from the branch above
 | **Red ✕** | CI is failing. Hover it for the failing checks, each linked to its run |
 | **Review icon** | ✓ approved, 💬 changes requested, 👤+ no reviewers yet, 🕐 waiting for review |
 | **Small number** | unresolved review conversations |
-| **↻ restack** | the branch is no longer based on its parent's head; click it to have Claude restack it |
+| **↻ restack** | the branch is no longer based on its parent's head, and its line to the parent is dotted; click it to have Claude restack it |
 | **Badges** | the PR's GitHub labels, in their colors; hover one for its description; when they don't fit, `+N` shows the rest on hover |
 | **+12 −3** | lines added and removed against the parent branch, ignoring whitespace; hover and click **View diff** to see the diff in a side pane |
 

@@ -58,6 +58,9 @@ export type Lane = {
   down: boolean
   pipes: number[]
   corners: number[]
+  pipeOwners?: string[]
+  cornerOwners?: string[]
+  upOwner?: string
 }
 
 export type StackRow = {
