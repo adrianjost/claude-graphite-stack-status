@@ -759,24 +759,42 @@ function diffSvg(diff: { added: number; removed: number }, chars: number) {
 const esc = (text: string) =>
   text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
+const DOT_STEP = 4
+const DOT_R = 1.25
+
+function dotsBetween(a: number, b: number, place: (at: number) => string) {
+  const out: string[] = []
+  for (let at = Math.ceil(a / DOT_STEP) * DOT_STEP; at <= b; at += DOT_STEP) out.push(place(at))
+  return out.join('')
+}
+
 function laneSvg(lane: Lane, columns: number, branch: string, color?: string, isBehind = (_: string) => false) {
   const x = (c: number) => COL / 2 + c * COL
   const cy = ROW / 2
-  const base = `stroke="${LINE}" stroke-width="${STROKE}" fill="none" stroke-linecap="round"`
-  const solid = `${base} stroke-opacity="0.7"`
-  const dotted = `${base} stroke-opacity="0.9" stroke-dasharray="0.01 3.5"`
-  const style = (owner?: string) => (owner && isBehind(owner) ? dotted : solid)
+  const solid = `stroke="${LINE}" stroke-width="${STROKE}" stroke-opacity="0.7" fill="none" stroke-linecap="round"`
+  const dot = (dx: number, dy: number) => `<circle cx="${dx}" cy="${dy}" r="${DOT_R}" fill="${LINE}"/>`
+  const vertical = (vx: number, y1: number, y2: number, dotted: boolean) =>
+    dotted ? dotsBetween(y1, y2, y => dot(vx, y)) : `<line x1="${vx}" y1="${y1}" x2="${vx}" y2="${y2}" ${solid}/>`
+  const horizontal = (x1: number, x2: number, dotted: boolean) =>
+    dotted ? dotsBetween(x1, x2, hx => dot(hx, cy)) : `<line x1="${x1}" y1="${cy}" x2="${x2}" y2="${cy}" ${solid}/>`
+  const behind = (owner?: string) => !!owner && isBehind(owner)
   const parts: string[] = []
-  lane.pipes.forEach((c, i) => parts.push(`<line x1="${x(c)}" y1="0" x2="${x(c)}" y2="${ROW}" ${style(lane.pipeOwners?.[i])}/>`))
-  if (lane.up) parts.push(`<line x1="${x(lane.col)}" y1="0" x2="${x(lane.col)}" y2="${cy - R - GAP}" ${style(lane.upOwner)}/>`)
-  if (lane.down) parts.push(`<line x1="${x(lane.col)}" y1="${cy + R + GAP}" x2="${x(lane.col)}" y2="${ROW}" ${style(branch)}/>`)
+  lane.pipes.forEach((c, i) => parts.push(vertical(x(c), 0, ROW, behind(lane.pipeOwners?.[i]))))
+  if (lane.up) parts.push(vertical(x(lane.col), 0, cy - R - GAP, behind(lane.upOwner)))
+  if (lane.down) parts.push(vertical(x(lane.col), cy + R + GAP, ROW, behind(branch)))
   let from = x(lane.col) + R + GAP
   lane.corners.forEach((c, i) => {
     const owners = (lane.cornerOwners ?? []).slice(i)
-    const shared = owners.length > 0 && owners.every(owner => isBehind(owner)) ? dotted : solid
-    if (x(c) - CURVE > from) parts.push(`<line x1="${from}" y1="${cy}" x2="${x(c) - CURVE}" y2="${cy}" ${shared}/>`)
+    if (x(c) - CURVE > from) parts.push(horizontal(from, x(c) - CURVE, owners.length > 0 && owners.every(behind)))
     from = x(c) - CURVE
-    parts.push(`<path d="M${x(c)} 0 V${cy - CURVE} Q${x(c)} ${cy} ${x(c) - CURVE} ${cy}" ${style(lane.cornerOwners?.[i])}/>`)
+    if (behind(lane.cornerOwners?.[i])) {
+      const t = 0.5
+      const qx = (1 - t) ** 2 * x(c) + 2 * (1 - t) * t * x(c) + t ** 2 * (x(c) - CURVE)
+      const qy = (1 - t) ** 2 * (cy - CURVE) + 2 * (1 - t) * t * cy + t ** 2 * cy
+      parts.push(vertical(x(c), 0, cy - CURVE, true), dot(qx, qy))
+    } else {
+      parts.push(`<path d="M${x(c)} 0 V${cy - CURVE} Q${x(c)} ${cy} ${x(c) - CURVE} ${cy}" ${solid}/>`)
+    }
   })
   parts.push(
     color
