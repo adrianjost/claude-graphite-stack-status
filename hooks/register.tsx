@@ -19,6 +19,8 @@ const DIFF_MAX_CHARS = 90_000
 const DIFF_DRAW_BUDGET = 95_000
 const diffView = atom({ plugin: 'graphite-stack', key: 'diffView' } as const, null as DiffView | null)
 const linkTarget = atom({ plugin: 'graphite-stack', key: 'linkTarget' } as const, 'github' as LinkTarget)
+const working = atom({ plugin: 'graphite-stack', key: 'working' } as const, null as string | null)
+const STACK_ACTION_TIMEOUT_MS = 3 * 60_000
 
 type MetaRow = { branch_name: string; parent_branch_name: string | null; children: string | null; validation_result: string | null }
 
@@ -95,9 +97,9 @@ const TOOLS: Record<string, string> = {
   sqlite3: 'sqlite3',
 }
 
-async function exec($: Engine, cwd: string, argv: string[]) {
+async function exec($: Engine, cwd: string, argv: string[], timeoutMs = 30_000) {
   try {
-    return await $.process.run(argv, { cwd, timeoutMs: 30_000 })
+    return await $.process.run(argv, { cwd, timeoutMs })
   } catch (error) {
     const tool = argv[0] ?? ''
     throw new Problem({
@@ -533,6 +535,57 @@ async function schedulePoll($: Engine) {
       await schedulePoll($)
     })()
   })
+}
+
+async function stackAction($: Engine, branch?: string) {
+  if (await read($, working)) return
+  const label = branch ? `Restacking ${branch}…` : 'Syncing with main…'
+  await update($, working, () => label)
+  const handOff = (reason: string) =>
+    void $.prompt.submit({
+      text:
+        `${reason} Bring my Graphite stack up to date with origin/main: run \`gt sync\` (accept updating trunk and ` +
+        'deleting merged branches), then `gt restack`, resolving any conflicts (`gt continue` after each). ' +
+        "Switch back to the branch I was on afterwards, don't push anything, and tell me what changed.",
+      asUser: true,
+    })
+  try {
+    const cwd = await $.session.cwd()
+    const original = await run($, cwd, ['git', 'branch', '--show-current'])
+    const dirty = await run($, cwd, ['git', 'status', '--porcelain', '--untracked-files=no'])
+    if (dirty) return handOff('The working tree has uncommitted changes, so the graphite-stack plugin did not sync on its own.')
+
+    const steps = [
+      ['gt', 'sync', '--force', '--no-interactive'],
+      ['gt', 'restack', '--no-interactive', ...(branch ? ['--branch', branch] : [])],
+    ]
+    for (const argv of steps) {
+      const result = await exec($, cwd, argv, STACK_ACTION_TIMEOUT_MS)
+      if (result.exitCode === 0) continue
+      const output = `${result.stdout}\n${result.stderr}`.trim().split('\n').slice(-15).join('\n')
+      const rebasing = (await run($, cwd, ['git', 'status']))?.includes('rebase in progress') ||
+        /conflict/i.test(output)
+      return void $.prompt.submit({
+        text:
+          `\`${argv.join(' ')}\` ${rebasing ? 'stopped on a conflict' : 'failed'}:\n\n\`\`\`\n${output}\n\`\`\`\n\n` +
+          (rebasing
+            ? 'Resolve the conflicts and run `gt continue` until the restack finishes. '
+            : 'Find out what went wrong and finish syncing and restacking my Graphite stack. ') +
+          `Switch back to ${original ? `\`${original}\`` : 'the branch I was on'} afterwards and don't push anything.`,
+        asUser: true,
+      })
+    }
+    if (original && (await run($, cwd, ['git', 'branch', '--show-current'])) !== original) {
+      await run($, cwd, ['git', 'checkout', original])
+    }
+    $.ui.toast(branch ? `Restacked ${branch}` : 'Stack synced with main')
+  } catch (error) {
+    if (error instanceof Problem) await update($, snapshot, s => ({ ...s, issue: error.issue }))
+    else handOff(`The graphite-stack plugin failed to sync (${String(error)}).`)
+  } finally {
+    await update($, working, () => null)
+    void refresh($, 'local')
+  }
 }
 
 async function refresh($: Engine, mode: Mode) {
@@ -1104,6 +1157,7 @@ export const register: Register = on => {
     const { Box, Text, Button, Link, Svg, Select } = elements
 
     const links = await read($, linkTarget)
+    const busy = await read($, working)
     const behind = new Set(s.rows.filter(row => row.needsRestack).map(row => row.branch))
     const prUrl = (pr: PrInfo) => (links === 'graphite' ? graphiteUrl(pr) : pr.url)
     const prs = s.rows.filter(row => row.pr)
@@ -1116,7 +1170,7 @@ export const register: Register = on => {
     const summary = [
       `${prs.length} PR${prs.length === 1 ? '' : 's'}`,
       failing ? `${failing} failing` : '',
-      s.isLoading ? 'refreshing…' : '',
+      busy ?? (s.isLoading ? 'refreshing…' : ''),
 
     ].filter(Boolean).join(' · ')
 
@@ -1144,16 +1198,8 @@ export const register: Register = on => {
             key="sync"
             plain
             dimColor
-            label="Sync with main"
-            onPress={() =>
-              void $.prompt.submit({
-                text:
-                  'Bring my Graphite stack up to date with the latest origin/main: run `gt sync` (accept updating trunk and ' +
-                  'deleting merged branches), then `gt restack` to rebase every branch of the stack onto it, resolving any ' +
-                  "conflicts. Switch back to the branch I was on afterwards, don't push anything, and tell me what changed.",
-                asUser: true,
-              })
-            }
+            label={busy && !busy.startsWith('Restacking') ? 'Syncing…' : 'Sync with main'}
+            onPress={() => void stackAction($)}
           />
           <Button key="refresh" plain dimColor hotkey="r" label="Refresh" onPress={() => void refresh($, 'force')} />
           <Button key="hide" plain dimColor hotkey="h" label="Hide" onPress={() => void update($, isHidden, () => true)} />
@@ -1244,16 +1290,8 @@ export const register: Register = on => {
                   <Button
                     key={`restack-${row.branch}`}
                     plain
-                    label="↻ restack"
-                    onPress={() =>
-                      void $.prompt.submit({
-                        text:
-                          `Restack the Graphite branch \`${row.branch}\` onto the latest origin/main: run \`gt sync\` first ` +
-                          '(accept updating trunk and deleting merged branches), then check the branch out, run `gt restack` and ' +
-                          'resolve any conflicts. Switch back to the branch I was on afterwards, and don\'t push anything.',
-                        asUser: true,
-                      })
-                    }
+                    label={busy === `Restacking ${row.branch}…` ? '↻ restacking…' : '↻ restack'}
+                    onPress={() => void stackAction($, row.branch)}
                   />
                 </Box>
               )}

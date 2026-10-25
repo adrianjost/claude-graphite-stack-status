@@ -87,6 +87,6 @@ export type StackSnapshot = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'graphite-stack': { snapshot: StackSnapshot; isHidden: boolean; linkTarget: LinkTarget; diffView: DiffView | null }
+    'graphite-stack': { snapshot: StackSnapshot; isHidden: boolean; linkTarget: LinkTarget; diffView: DiffView | null; working: string | null }
   }
 }

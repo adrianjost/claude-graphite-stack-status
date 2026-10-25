@@ -57,7 +57,7 @@ Hover a branch's line counts and click **View diff** to open its changes in a si
 
 ## Keeping the stack current
 
-**Sync with main** in the band's header asks Claude to run `gt sync` and `gt restack`, so the whole stack is based on the latest `origin/main`. A branch's **↻ restack** button does the same for that branch. Neither pushes anything.
+**Sync with main** in the band's header runs `gt sync` and `gt restack` right away, so the whole stack is based on the latest `origin/main`. A branch's **↻ restack** button does the same for that branch's stack. The header shows progress while they run, and neither pushes anything. If a rebase hits a conflict, the working tree has uncommitted changes or a command fails, the job is handed to Claude to finish.
 
 ## Settings
 
