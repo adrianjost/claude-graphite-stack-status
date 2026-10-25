@@ -1,6 +1,6 @@
 {
   "name": "graphite-stack",
-  "version": "2.1.2",
+  "version": "2.2.0",
   "description": "Shows the Graphite stack of your current branch above the Claude Code prompt: stack tree, PR state, review status, open conversations, failing CI and labels.",
   "author": {
     "name": "Adrian Jost",
