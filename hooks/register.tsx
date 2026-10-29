@@ -693,7 +693,7 @@ const ICON = 16
 const CI_ICON = 14
 const LINE = '#8b949e'
 const COL = 14
-const ROW = 24
+const ROW = 26
 const R = 4.5
 const GAP = 2
 const CURVE = 5
@@ -812,12 +812,12 @@ function diffSvg(diff: { added: number; removed: number }, chars: number) {
 const esc = (text: string) =>
   text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
-const DOT_STEP = 4
+const DOT_STEP = ROW / 6
 const DOT_R = 1.25
 
 function dotsBetween(a: number, b: number, place: (at: number) => string) {
   const out: string[] = []
-  for (let at = Math.ceil(a / DOT_STEP) * DOT_STEP; at <= b; at += DOT_STEP) out.push(place(at))
+  for (let k = Math.ceil(a / DOT_STEP - 1e-6); k * DOT_STEP <= b + 1e-6; k++) out.push(place(+(k * DOT_STEP).toFixed(2)))
   return out.join('')
 }
 
