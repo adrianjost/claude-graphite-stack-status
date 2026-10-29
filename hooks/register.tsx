@@ -499,7 +499,7 @@ async function buildRows(
   rows.push({
     branch: trunk,
     lane: { col: 0, up: true, down: false, pipes: [], corners: [], upOwner: root },
-    isCurrent: false,
+    isCurrent: trunk === branch,
     isTrunk: true,
     needsRestack: false,
   })
@@ -696,6 +696,8 @@ const COL = 14
 const ROW = 26
 const R = 4.5
 const GAP = 2
+const HALO_R = 6.25
+const HALO_STROKE = 1.25
 const CURVE = 5
 const STROKE = 1.5
 
@@ -821,10 +823,11 @@ function dotsBetween(a: number, b: number, place: (at: number) => string) {
   return out.join('')
 }
 
-function laneSvg(lane: Lane, columns: number, branch: string, color?: string, isBehind = (_: string) => false) {
+function laneSvg(lane: Lane, columns: number, branch: string, color?: string, isBehind = (_: string) => false, isCurrent = false) {
   const x = (c: number) => COL / 2 + c * COL
   const cy = ROW / 2
-  const solid = `stroke="${LINE}" stroke-width="${STROKE}" stroke-opacity="0.7" fill="none" stroke-linecap="round"`
+  const clear = isCurrent ? HALO_R + HALO_STROKE / 2 + 1.5 : R + GAP
+  const solid = `stroke="${LINE}" stroke-width="${STROKE}" fill="none" stroke-linecap="round"`
   const dot = (dx: number, dy: number) => `<circle cx="${dx}" cy="${dy}" r="${DOT_R}" fill="${LINE}"/>`
   const vertical = (vx: number, y1: number, y2: number, dotted: boolean) =>
     dotted ? dotsBetween(y1, y2, y => dot(vx, y)) : `<line x1="${vx}" y1="${y1}" x2="${vx}" y2="${y2}" ${solid}/>`
@@ -833,9 +836,9 @@ function laneSvg(lane: Lane, columns: number, branch: string, color?: string, is
   const behind = (owner?: string) => !!owner && isBehind(owner)
   const parts: string[] = []
   lane.pipes.forEach((c, i) => parts.push(vertical(x(c), 0, ROW, behind(lane.pipeOwners?.[i]))))
-  if (lane.up) parts.push(vertical(x(lane.col), 0, cy - R - GAP, behind(lane.upOwner)))
-  if (lane.down) parts.push(vertical(x(lane.col), cy + R + GAP, ROW, behind(branch)))
-  let from = x(lane.col) + R + GAP
+  if (lane.up) parts.push(vertical(x(lane.col), 0, cy - clear, behind(lane.upOwner)))
+  if (lane.down) parts.push(vertical(x(lane.col), cy + clear, ROW, behind(branch)))
+  let from = x(lane.col) + clear
   lane.corners.forEach((c, i) => {
     const owners = (lane.cornerOwners ?? []).slice(i)
     if (x(c) - CURVE > from) parts.push(horizontal(from, x(c) - CURVE, owners.length > 0 && owners.every(behind)))
@@ -854,6 +857,9 @@ function laneSvg(lane: Lane, columns: number, branch: string, color?: string, is
       ? `<circle cx="${x(lane.col)}" cy="${cy}" r="${R}" fill="${color}"/>`
       : `<circle cx="${x(lane.col)}" cy="${cy}" r="${R - STROKE / 2}" fill="none" stroke="${LINE}" stroke-width="${STROKE}"/>`,
   )
+  if (isCurrent) {
+    parts.push(`<circle cx="${x(lane.col)}" cy="${cy}" r="${HALO_R}" fill="none" stroke="${color ?? LINE}" stroke-width="${HALO_STROKE}"/>`)
+  }
   const width = columns * COL
   return {
     source: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${ROW}" viewBox="0 0 ${width} ${ROW}">${parts.join('')}</svg>`,
@@ -1232,7 +1238,7 @@ export const register: Register = on => {
         )}
         {s.rows.map(row => {
           const pr = row.pr
-          const lane = laneSvg(row.lane, s.columns, row.branch, pr ? prDot(pr) : undefined, owner => behind.has(owner))
+          const lane = laneSvg(row.lane, s.columns, row.branch, pr ? prDot(pr) : undefined, owner => behind.has(owner), row.isCurrent)
           const meta = metaSvg(layout, pr)
 
           return (
