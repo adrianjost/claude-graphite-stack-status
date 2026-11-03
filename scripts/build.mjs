@@ -26,3 +26,4 @@ const css = [
 ].join('\n')
 await writeFile(`${out}/app.css`, css)
 await writeFile(`${out}/index.html`, await readFile(`${src}/index.html`, 'utf8'))
+await writeFile(`${out}/better-github.svg`, await readFile(`${src}/better-github.svg`))

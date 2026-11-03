@@ -1635,3 +1635,14 @@ td.code:not(.empty) {
   font-size: 12px;
   border-top: 1px solid var(--border-muted);
 }
+
+.page-footer {
+  display: flex;
+  justify-content: center;
+  margin-top: 48px;
+}
+
+.page-footer img {
+  display: block;
+  image-rendering: pixelated;
+}
