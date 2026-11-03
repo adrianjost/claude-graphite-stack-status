@@ -382,6 +382,43 @@ function lnCell(path, line, number, extra = '', column = 'new') {
   return `<td class="ln ${extra}${commented ? ' commented' : ''}${isPending ? ' pending' : ''}"${isPending ? ' title="Uncommitted change"' : ''} data-path="${esc(path)}" data-side="${target.side}" data-line="${target.line}">${number}<button class="add-comment" tabindex="-1" title="Comment on this line">+</button></td>`
 }
 
+let renderedTargets = new Set()
+const targetKey = t => `${t.path}|${t.side}|${t.line}`
+
+function pendingCard(comment, index, note = '') {
+  return `<div class="comment">
+    <div class="comment-head"><strong>You</strong><span class="badge">Pending</span><span>on ${rangeLabel(comment)}</span>${note}<span class="spacer"></span>
+      <button class="btn invisible" data-send-now="${index}" title="Send just this comment to Claude now">Send now</button>
+      <button class="btn invisible" data-edit="${index}">Edit</button>
+      <button class="btn invisible" data-remove="${index}">Delete</button></div>
+    <div class="comment-body">${esc(comment.text)}</div></div>`
+}
+
+function composerBox() {
+  return `<div class="composer">
+    <textarea placeholder="Leave a comment for Claude on ${rangeLabel(composer)}…">${esc(composer.text ?? '')}</textarea>
+    <div class="actions"><span class="muted hint">⌘↵ to save · Esc to cancel</span>
+      <button class="btn" data-act="cancel">Cancel</button>
+      <button class="btn" data-act="send-now" title="Send just this comment to Claude now, without the rest of the review">Send to Claude now</button>
+      <button class="btn primary" data-act="save">${composer.text ? 'Update comment' : 'Add comment'}</button></div>
+    </div>`
+}
+
+function strandedComments(path, isRendered) {
+  const stranded = comments
+    .map((comment, index) => ({ comment, index }))
+    .filter(({ comment }) => !comment.kind && comment.path === path && !isRendered(comment))
+  const composerStranded = composer && composer.path === path && !isRendered(composer)
+  if (!stranded.length && !composerStranded) return ''
+  let html = `<div class="stranded"><div class="stranded-head">Comments on lines that are no longer in this diff</div>`
+  for (const { comment, index } of stranded) {
+    if (composer && sameTarget(composer, comment)) continue
+    html += pendingCard(comment, index)
+  }
+  if (composerStranded) html += composerBox()
+  return `${html}</div>`
+}
+
 function threadRows(path, targets, colspan) {
   let html = ''
   const row = (content, side) =>
@@ -392,18 +429,10 @@ function threadRows(path, targets, colspan) {
       : `<tr class="thread"><td colspan="${colspan}">${content}</td></tr>`
   for (const target of targets) {
     const at = { path, ...target }
+    renderedTargets.add(targetKey(at))
     for (const comment of comments.filter(c => sameTarget(c, at))) {
       if (composer && sameTarget(composer, at)) continue
-      const index = comments.indexOf(comment)
-      html += row(
-        `<div class="comment">
-        <div class="comment-head"><strong>You</strong><span class="badge">Pending</span><span>on ${rangeLabel(comment)}</span><span class="spacer"></span>
-          <button class="btn invisible" data-send-now="${index}" title="Send just this comment to Claude now">Send now</button>
-          <button class="btn invisible" data-edit="${index}">Edit</button>
-          <button class="btn invisible" data-remove="${index}">Delete</button></div>
-        <div class="comment-body">${esc(comment.text)}</div></div>`,
-        target.side,
-      )
+      html += row(pendingCard(comment, comments.indexOf(comment)), target.side)
     }
     if (prefs.showSent) {
       for (const comment of sent.filter(c => sameTarget(c, at))) {
@@ -418,18 +447,7 @@ function threadRows(path, targets, colspan) {
         )
       }
     }
-    if (composer && sameTarget(composer, at)) {
-      html += row(
-        `<div class="composer">
-        <textarea placeholder="Leave a comment for Claude on ${rangeLabel(composer)}…">${esc(composer.text ?? '')}</textarea>
-        <div class="actions"><span class="muted hint">⌘↵ to save · Esc to cancel</span>
-          <button class="btn" data-act="cancel">Cancel</button>
-          <button class="btn" data-act="send-now" title="Send just this comment to Claude now, without the rest of the review">Send to Claude now</button>
-          <button class="btn primary" data-act="save">${composer.text ? 'Update comment' : 'Add comment'}</button></div>
-        </div>`,
-        target.side,
-      )
-    }
+    if (composer && sameTarget(composer, at)) html += row(composerBox(), target.side)
   }
   return html
 }
@@ -488,6 +506,12 @@ function hunkRow(split, expand, label, half = false) {
 }
 
 function fileBody(file) {
+  renderedTargets = new Set()
+  const body = fileBodyInner(file)
+  return strandedComments(file.path, c => renderedTargets.has(targetKey(c))) + body
+}
+
+function fileBodyInner(file) {
   if (file.binary) return '<div class="placeholder">Binary file not shown</div>'
   if (file.isHeavy && !shownHeavy.has(file.path)) {
     return `<div class="placeholder">${file.isGenerated ? 'Generated file' : 'Large diff'} not rendered by default.
@@ -892,11 +916,17 @@ function renderHeader() {
 
 function renderDiff() {
   $('#notice').textContent = current?.error ?? ''
-  $('#diff').innerHTML = files.length
+  const paths = new Set(files.map(f => f.path))
+  const gone = [...new Set(comments.filter(c => !c.kind && !paths.has(c.path)).map(c => c.path))]
+  const orphans = gone
+    .map(path => `<section class="file" data-file="${esc(path)}"><div class="file-head"><span class="path">${pathHtml(path)}</span><span class="badge">No longer changed</span></div>
+      <div class="file-body">${strandedComments(path, () => false)}</div></section>`)
+    .join('')
+  $('#diff').innerHTML = orphans + (files.length
     ? files.map(fileCard).join('')
     : current?.error
       ? ''
-      : '<div class="empty-state">No changes on this branch.</div>'
+      : '<div class="empty-state">No changes on this branch.</div>')
 }
 
 function renderAll() {
@@ -912,6 +942,7 @@ function rerenderFile(path) {
   const file = files.find(f => f.path === path)
   const card = cardOf(path)
   if (file && card) card.outerHTML = fileCard(file)
+  else if (!file) renderDiff()
 }
 
 /* data */
@@ -1004,7 +1035,11 @@ function commentItems(list, kind) {
             ? 'PR description'
             : `${esc(comment.path)}:${comment.start && comment.start !== comment.line ? `${comment.start}–${comment.line}` : comment.line}`
         }</code>
-          ${kind === 'sent' ? `<span class="muted">${esc(timeAgo(comment.sentAt))}</span>` : ''}</div>
+          ${
+            kind === 'sent'
+              ? `<span class="muted">${esc(timeAgo(comment.sentAt))}</span>`
+              : `<button class="btn invisible delete-item" data-remove-at="${jumps.length - 1}" title="Delete this comment">Delete</button>`
+          }</div>
         <div class="text">${esc(comment.text)}</div></div>`
     }
   }
@@ -1506,7 +1541,7 @@ document.addEventListener('click', event => {
   const head = t.closest('.file-head')
   const headToggle =
     head && !t.closest('button, label, input, a') && window.getSelection()?.isCollapsed !== false ? head.querySelector('[data-collapse]') : null
-  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-jump],[data-describe-edit],[data-send-now]')
+  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-jump],[data-describe-edit],[data-send-now],[data-remove-at]')
   if (!t.closest('#submit') && !t.closest('[data-act="review"]')) $('#submit').hidden = true
   if (!el) return
   const d = el.dataset
@@ -1565,6 +1600,20 @@ document.addEventListener('click', event => {
     if (comment) rerenderFile(comment.path)
     renderCommentViews()
     renderDescriptionThreads()
+  }
+  if (d.removeAt !== undefined) {
+    const target = jumps[Number(d.removeAt)]
+    if (!target) return
+    if (target.branch === selected) {
+      comments.splice(target.index, 1)
+      persistComments()
+    } else {
+      const list = stored(`comments:${target.branch}`, [])
+      list.splice(target.index, 1)
+      store(`comments:${target.branch}`, list.length ? list : undefined)
+    }
+    renderAll()
+    return
   }
   if (d.jump) {
     const target = jumps[Number(d.jump)]

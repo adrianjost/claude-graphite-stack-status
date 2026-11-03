@@ -1550,3 +1550,30 @@ tr.del > td.ln[data-line]:first-child:has(~ td.code:hover) .add-comment {
 td.ln[data-line]:has(+ td.code:hover) {
   color: var(--text);
 }
+
+.stranded {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--canvas);
+  border-bottom: 1px solid var(--border-muted);
+}
+
+.stranded-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warn);
+}
+
+.stranded .comment,
+.stranded .composer {
+  max-width: none;
+}
+
+.delete-item {
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+  color: var(--del);
+}
