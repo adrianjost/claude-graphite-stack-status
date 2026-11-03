@@ -1,5 +1,6 @@
 import hljs from 'highlight.js/lib/common'
 import { diffWordsWithSpace } from 'diff'
+import DOMPurify from 'dompurify'
 
 const token = new URLSearchParams(location.search).get('t') ?? ''
 const $ = selector => document.querySelector(selector)
@@ -93,6 +94,7 @@ function select(branch) {
   collapsed = new Set()
   expansions = new Map()
   composer = null
+  descriptionOpen = false
   comments = stored(`comments:${branch}`, [])
   sent = stored(`sent:${branch}`, [])
   renderStack()
@@ -582,6 +584,47 @@ function renderSidebar() {
     .join('')
 }
 
+const MEDIA_HOSTS = /^https:\/\/([a-z0-9-]+\.)*(github\.com|githubusercontent\.com)\//i
+
+DOMPurify.addHook('afterSanitizeAttributes', node => {
+  if (node.tagName === 'A') {
+    node.setAttribute('target', '_blank')
+    node.setAttribute('rel', 'noreferrer noopener')
+  }
+  if (node.tagName === 'IMG' || node.tagName === 'VIDEO' || node.tagName === 'SOURCE') {
+    const src = node.getAttribute('src') ?? ''
+    if (src && !MEDIA_HOSTS.test(src)) node.removeAttribute('src')
+    node.removeAttribute('srcset')
+  }
+})
+
+let descriptionHtml = null
+let descriptionOpen = false
+
+function renderDescription() {
+  const section = $('#description')
+  const body = selectedRow()?.pr?.bodyHtml?.trim() ?? ''
+  section.hidden = !body
+  if (!body) {
+    descriptionHtml = null
+    return
+  }
+  if (body !== descriptionHtml) {
+    descriptionHtml = body
+    section.querySelector('.description-body').innerHTML = DOMPurify.sanitize(body.replace(/\sstyle=("[^"]*"|'[^']*')/gi, ''), {
+      FORBID_TAGS: ['style', 'form', 'iframe', 'object', 'embed'],
+      FORBID_ATTR: ['style'],
+    })
+  }
+  const inner = section.querySelector('.description-body')
+  section.classList.toggle('open', descriptionOpen)
+  const overflows = inner.scrollHeight > 200
+  section.classList.toggle('capped', overflows && !descriptionOpen)
+  const toggle = section.querySelector('.description-toggle')
+  toggle.hidden = !overflows
+  toggle.textContent = descriptionOpen ? 'Show less' : 'Show all'
+}
+
 const REVIEW_STATES = {
   APPROVED: ['approved', 'Approved', '✓'],
   CHANGES_REQUESTED: ['changes', 'Requested changes', '±'],
@@ -648,6 +691,7 @@ function renderHeader() {
   const row = selectedRow()
   if (!row) {
     $('#header').innerHTML = '<h1>Pick a branch</h1>'
+    renderDescription()
     return
   }
   const pr = row.pr
@@ -708,6 +752,7 @@ function renderHeader() {
   paintLabels()
   document.documentElement.style.setProperty('--header-height', `${$('#header').offsetHeight}px`)
   updateIdentity()
+  renderDescription()
 }
 
 function renderDiff() {
@@ -1084,6 +1129,10 @@ document.addEventListener('click', event => {
     for (const row of stackRows()) store(`sent:${row.branch}`, undefined)
     sent = []
     renderAll()
+  }
+  if (d.act === 'toggle-description') {
+    descriptionOpen = !descriptionOpen
+    renderDescription()
   }
   if (d.act === 'save') saveComposer()
   if (d.act === 'cancel') closeComposer()

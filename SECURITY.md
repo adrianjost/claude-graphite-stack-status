@@ -8,7 +8,8 @@ The review page is served by a small Node.js server that each Claude Code sessio
 
 - It listens on `127.0.0.1` only and answers only requests whose `Host` is exactly that address, which blocks DNS rebinding.
 - Every API request needs a 256-bit random token from the page's URL, compared in constant time. Requests from other origins are refused.
-- A strict Content Security Policy limits the page to its own server: no inline scripts, no third-party hosts, no frames.
+- A strict Content Security Policy limits the page to its own server: no inline scripts or styles, no frames, and no third-party hosts except images and videos from GitHub (`github.com`, `*.githubusercontent.com`) for screenshots in PR descriptions.
+- PR descriptions are GitHub-rendered HTML, sanitized again with DOMPurify before display: scripts, event handlers, inline styles, forms and frames are removed, media from other hosts is dropped, and links open in a new tab without a referrer.
 - `Referrer-Policy: no-referrer` keeps the token out of requests to sites the page links to.
 - File reads are limited to the repository; paths that leave it, directly or through a symlink, are refused.
 - Git runs without external diff drivers or text conversion filters.

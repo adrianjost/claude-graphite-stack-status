@@ -50,7 +50,7 @@ The band appears on its own whenever the session's branch belongs to a Graphite 
 **Review stack** in the band's header, or **Review ↗** on a branch's line counts, opens a live review page for the stack in your browser. Keep it open: it follows the session as Claude works, and when it's open those buttons switch it to the branch instead of opening another tab.
 
 - The stack graph on the left switches between branches (or press `[` and `]`).
-- For a branch with a PR, the top shows its state, assigned reviewers with their review status, and its labels.
+- For a branch with a PR, the top shows its state, assigned reviewers with their review status, and its labels, followed by the PR description (capped, with **Show all**).
 - Diffs are GitHub-style: split (default) or unified, with syntax highlighting, highlighted changed words and expandable context. Compare against the parent branch or trunk and hide whitespace.
 - On the checked-out branch, switch between all changes, committed only and uncommitted only. In the combined view, uncommitted lines get an orange dot and their files an **Uncommitted** badge.
 - Generated and very large files are left out until you show them. Mark files as viewed; the mark resets when the file changes.
@@ -75,7 +75,7 @@ When something keeps the band from working, it shows a ⚠ line with the reason,
 
 ## Development
 
-The review page's sources live in `review/src`. Its dependencies (highlight.js, jsdiff) are pinned in `package.json` and bundled into `review/dist` by esbuild, so the page loads nothing from the internet. `review/dist` is committed because plugins install straight from the repository:
+The review page's sources live in `review/src`. Its dependencies (highlight.js, jsdiff, DOMPurify) are pinned in `package.json` and bundled into `review/dist` by esbuild, so the page loads no code from the internet (only screenshots in PR descriptions come from GitHub). `review/dist` is committed because plugins install straight from the repository:
 
 ```bash
 npm ci

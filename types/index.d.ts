@@ -23,6 +23,7 @@ export type PrInfo = {
   openThreads: number
   hasReviewers: boolean
   reviewers?: { name: string; state: string }[]
+  bodyHtml?: string
 }
 
 export type Lane = {

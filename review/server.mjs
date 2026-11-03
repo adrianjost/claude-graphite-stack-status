@@ -38,7 +38,7 @@ function git(args) {
 const HEADERS = {
   'cache-control': 'no-store',
   'content-security-policy':
-    "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: https://github.com https://*.githubusercontent.com; media-src https://github.com https://*.githubusercontent.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   'referrer-policy': 'no-referrer',
   'x-content-type-options': 'nosniff',
   'cross-origin-resource-policy': 'same-origin',

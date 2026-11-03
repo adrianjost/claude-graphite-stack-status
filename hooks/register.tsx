@@ -56,6 +56,7 @@ type GqlPr = {
   state: string
   isDraft: boolean
   reviewDecision: string | null
+  bodyHTML: string
   labels: { nodes: { name: string; color: string; description: string | null }[] }
   reviewRequests: { totalCount: number; nodes: { requestedReviewer: { login?: string; name?: string } | null }[] }
   latestReviews: { totalCount: number; nodes: { state: string; author: { login: string } | null }[] }
@@ -64,7 +65,7 @@ type GqlPr = {
 }
 
 const PR_FIELDS =
-  'number title url state isDraft reviewDecision labels(first:20){nodes{name color description}} ' +
+  'number title url state isDraft reviewDecision bodyHTML labels(first:20){nodes{name color description}} ' +
   'reviewRequests(first:20){totalCount nodes{requestedReviewer{... on User{login} ... on Bot{login} ... on Mannequin{login} ... on Team{name}}}} ' +
   'latestReviews(first:20){totalCount nodes{state author{login}}} reviewThreads(first:100){nodes{isResolved}} ' +
   'commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ' +
@@ -236,6 +237,7 @@ function toPrInfo(pr: GqlPr): PrInfo {
     failing,
     openThreads: pr.reviewThreads.nodes.filter(t => !t.isResolved).length,
     hasReviewers: pr.reviewRequests.totalCount + pr.latestReviews.totalCount > 0,
+    bodyHtml: pr.bodyHTML,
     reviewers: [
       ...pr.latestReviews.nodes.flatMap(r => (r.author ? [{ name: r.author.login, state: r.state }] : [])),
       ...pr.reviewRequests.nodes.flatMap(r => {
@@ -572,6 +574,7 @@ async function pushReview($: Engine) {
         reviewDecision: row.pr.reviewDecision,
         labels: row.pr.labels,
         reviewers: row.pr.reviewers ?? [],
+        bodyHtml: row.pr.bodyHtml ?? '',
       },
     })),
   }
