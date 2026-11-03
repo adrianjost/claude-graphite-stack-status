@@ -1,33 +1,5 @@
 export type LinkTarget = 'github' | 'graphite'
 
-export type DiffFile = {
-  path: string
-  added: number
-  removed: number
-  hunks: string
-  isTooLarge: boolean
-  isBinary: boolean
-  isNew: boolean
-  isGenerated: boolean
-}
-
-export type DiffView = {
-  branch: string
-  parent: string
-  trunk: string
-  compareTo: 'parent' | 'trunk'
-  showWhitespace: boolean
-  title: string
-  url?: string
-  root: string
-  headSha?: string
-  commits: { sha: string; subject: string }[]
-  files: DiffFile[]
-  collapsed: string[]
-  isLoading: boolean
-  error?: string
-}
-
 export type Issue = {
   message: string
   detail?: string
@@ -87,6 +59,6 @@ export type StackSnapshot = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'graphite-stack': { snapshot: StackSnapshot; isHidden: boolean; linkTarget: LinkTarget; diffView: DiffView | null; working: string | null }
+    'graphite-stack': { snapshot: StackSnapshot; isHidden: boolean; linkTarget: LinkTarget; working: string | null; reviewUrl: string | null }
   }
 }

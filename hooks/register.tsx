@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface as Engine, Register, Timer } from 'claude-code'
 
-import type { CiState, DiffFile, DiffView, Issue, Lane, LinkTarget, PrInfo, StackRow, StackSnapshot } from '../types'
+import type { CiState, Issue, Lane, LinkTarget, PrInfo, StackRow, StackSnapshot } from '../types'
 
 const POLL_MS = 60_000
 const POLL_BUSY_MS = 30_000
@@ -14,12 +14,11 @@ const GITHUB_COMMAND = /\b(git\s+push|gt\s+(submit|ss|sync|merge|get|land|repo\s
 const EMPTY: StackSnapshot = { branch: '', rows: [], columns: 1, updatedAt: 0, isLoading: false }
 const snapshot = atom({ plugin: 'graphite-stack', key: 'snapshot' } as const, EMPTY)
 const isHidden = atom({ plugin: 'graphite-stack', key: 'isHidden' } as const, false)
-const DIFF_PANE = 'graphite-stack-diff'
-const DIFF_MAX_CHARS = 90_000
-const DIFF_DRAW_BUDGET = 95_000
-const diffView = atom({ plugin: 'graphite-stack', key: 'diffView' } as const, null as DiffView | null)
 const linkTarget = atom({ plugin: 'graphite-stack', key: 'linkTarget' } as const, 'github' as LinkTarget)
 const working = atom({ plugin: 'graphite-stack', key: 'working' } as const, null as string | null)
+const reviewUrl = atom({ plugin: 'graphite-stack', key: 'reviewUrl' } as const, null as string | null)
+const REVIEW_PORT_BASE = 47100
+const REVIEW_PORTS = 1800
 const STACK_ACTION_TIMEOUT_MS = 3 * 60_000
 
 type MetaRow = { branch_name: string; parent_branch_name: string | null; children: string | null; validation_result: string | null }
@@ -275,131 +274,8 @@ async function loadPrs($: Engine, cwd: string, branches: string[], force: boolea
   return prs
 }
 
-const LANGUAGES: Record<string, string> = {
-  ts: 'typescript', tsx: 'tsx', mts: 'typescript', cts: 'typescript',
-  js: 'javascript', jsx: 'jsx', mjs: 'javascript', cjs: 'javascript',
-  json: 'json', md: 'markdown', css: 'css', scss: 'scss', html: 'html', svg: 'xml', xml: 'xml',
-  py: 'python', go: 'go', rs: 'rust', rb: 'ruby', java: 'java', kt: 'kotlin', swift: 'swift',
-  sql: 'sql', sh: 'bash', bash: 'bash', zsh: 'bash', yml: 'yaml', yaml: 'yaml', toml: 'toml',
-  graphql: 'graphql', gql: 'graphql', vue: 'vue', svelte: 'svelte', php: 'php', c: 'c', h: 'c', cpp: 'cpp',
-}
-
-const languageOf = (path: string) => LANGUAGES[path.split('.').pop()?.toLowerCase() ?? '']
-
 const GENERATED =
   /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|Cargo\.lock|go\.sum|poetry\.lock|composer\.lock|Gemfile\.lock)$|\.gen(\.[^/]*)?$|\.min\.(js|css)$|\.snap$|(^|\/)(generated|__generated__|insurance-tables)\//
-
-function parseDiff(out: string): DiffFile[] {
-  const files: DiffFile[] = []
-  for (const chunk of out.split(/^diff --git /m).slice(1)) {
-    const lines = chunk.split('\n')
-    const target = lines.find(line => line.startsWith('+++ '))?.slice(4)
-    const source = lines.find(line => line.startsWith('--- '))?.slice(4)
-    const path = (target && target !== '/dev/null' ? target : source ?? lines[0] ?? '?').replace(/^[ab]\//, '')
-    const start = lines.findIndex(line => line.startsWith('@@'))
-    const hunks = start < 0 ? '' : lines.slice(start).join('\n').trimEnd()
-    let added = 0
-    let removed = 0
-    for (const line of start < 0 ? [] : lines.slice(start)) {
-      if (line.startsWith('+')) added++
-      else if (line.startsWith('-')) removed++
-    }
-    const isNew = lines.some(line => line.startsWith('new file mode')) || source === '/dev/null'
-    const body = isNew
-      ? lines
-          .slice(start)
-          .filter(line => line.startsWith('+'))
-          .map(line => line.slice(1))
-          .join('\n')
-      : hunks
-    const isTooLarge = body.length > DIFF_MAX_CHARS
-    files.push({
-      path,
-      added,
-      removed,
-      hunks: isTooLarge ? '' : body,
-      isTooLarge,
-      isBinary: start < 0,
-      isNew,
-      isGenerated: GENERATED.test(path),
-    })
-  }
-  return files
-}
-
-type DiffTarget = Pick<DiffView, 'branch' | 'parent' | 'trunk' | 'compareTo' | 'showWhitespace' | 'title' | 'url'>
-
-async function loadDiff($: Engine, target: DiffTarget, keepCollapsed?: string[]) {
-  await update($, diffView, view => ({
-    ...target,
-    root: view?.root ?? '',
-    commits: view?.branch === target.branch ? view.commits : [],
-    files: view?.branch === target.branch ? view.files : [],
-    collapsed: view?.collapsed ?? [],
-    isLoading: true,
-  }))
-  const cwd = await $.session.cwd()
-  const base = target.compareTo === 'trunk' ? target.trunk : target.parent
-  const [out, log, head, root] = await Promise.all([
-    run($, cwd, ['git', 'diff', ...(target.showWhitespace ? [] : ['-w']), '--no-color', '--no-ext-diff', `${base}...${target.branch}`]),
-    run($, cwd, ['git', 'log', '--format=%h%x09%s', `${base}..${target.branch}`]),
-    run($, cwd, ['git', 'rev-parse', target.branch]),
-    run($, cwd, ['git', 'rev-parse', '--show-toplevel']),
-  ])
-  const files = out === undefined ? [] : parseDiff(out)
-  const paths = new Set(files.map(file => file.path))
-  await update($, diffView, () => ({
-    ...target,
-    root: root ?? '',
-    headSha: head,
-    commits: (log ?? '')
-      .split('\n')
-      .filter(Boolean)
-      .map(line => {
-        const [sha = '', ...subject] = line.split('\t')
-        return { sha, subject: subject.join('\t') }
-      }),
-    files,
-    collapsed: keepCollapsed
-      ? keepCollapsed.filter(path => paths.has(path))
-      : files.filter(file => file.isGenerated).map(file => file.path),
-    isLoading: false,
-    error: out === undefined ? `git diff ${base}...${target.branch} failed` : undefined,
-  }))
-}
-
-function stackOrder(rows: StackRow[]) {
-  return [...rows].reverse().filter(row => !row.isTrunk && row.parent)
-}
-
-async function openDiff($: Engine, row: StackRow, options?: Partial<Pick<DiffView, 'compareTo' | 'showWhitespace'>>) {
-  if (!row.parent) return
-  const [view, s] = await Promise.all([read($, diffView), read($, snapshot)])
-  const trunk = s.rows.find(r => r.isTrunk)?.branch ?? row.parent
-  const isSame = view?.branch === row.branch
-  void $.ui.open({ id: DIFF_PANE, title: row.pr ? `#${row.pr.number} changes` : 'Branch changes' })
-  await loadDiff(
-    $,
-    {
-      branch: row.branch,
-      parent: row.parent,
-      trunk,
-      compareTo: options?.compareTo ?? view?.compareTo ?? 'parent',
-      showWhitespace: options?.showWhitespace ?? view?.showWhitespace ?? false,
-      title: row.pr ? `#${row.pr.number} ${row.pr.title}` : row.branch,
-      url: row.pr?.url,
-    },
-    isSame && options ? view?.collapsed : undefined,
-  )
-}
-
-async function refreshDiff($: Engine) {
-  const view = await read($, diffView)
-  if (!view?.branch || view.isLoading) return
-  const cwd = await $.session.cwd()
-  const head = await run($, cwd, ['git', 'rev-parse', view.branch])
-  if (head && head !== view.headSha) await loadDiff($, view, view.collapsed)
-}
 
 async function readMetadata($: Engine, cwd: string, gitDir: string) {
   const db = `${gitDir}/.graphite_metadata.db`
@@ -588,6 +464,180 @@ async function stackAction($: Engine, branch?: string) {
   }
 }
 
+
+let review: { port: number; token: string } | undefined
+let reviewStarting: Promise<void> | undefined
+let reviewPushTimer: Timer | undefined
+let reviewConnected = false
+let reviewFocus: { branch: string; seq: number } | undefined
+
+function portFor(id: string) {
+  let h = 0
+  for (const ch of id) h = (Math.imul(31, h) + ch.charCodeAt(0)) | 0
+  return REVIEW_PORT_BASE + (Math.abs(h) % REVIEW_PORTS)
+}
+
+async function reviewToken($: Engine) {
+  const stored = await $.store.get('reviewToken')
+  if (typeof stored === 'string' && stored.length >= 32) return stored
+  const token = Array.from({ length: 40 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
+  await $.store.set('reviewToken', token)
+  return token
+}
+
+function startReview($: Engine) {
+  if (review) return Promise.resolve()
+  reviewStarting ??= (async () => {
+    const [cwd, id, token] = await Promise.all([$.session.cwd(), $.session.id(), reviewToken($)])
+    let port = 0
+    let failure: string | undefined
+    const ended = (async () => {
+      try {
+        const child = $.process.spawn({ argv: ['node', `${$.plugin.root}/review/server.mjs`, cwd, token, String(portFor(id))] })
+        for await (const { stream, text } of child) {
+          const found = /PORT (\d+)/.exec(text)
+          if (found) port = Number(found[1])
+          else if (stream === 'stderr') failure = text.trim()
+        }
+      } catch (error) {
+        failure = String(error)
+      }
+    })()
+    void ended.then(async () => {
+      if (review?.port !== port) return
+      review = undefined
+      await update($, reviewUrl, () => null)
+      $.clock.after(500, () => void startReview($))
+    })
+    for (let i = 0; i < 50 && !port && !failure; i++) await $.clock.sleep(100)
+    if (!port) {
+      $.ui.log(`review page didn't start: ${failure ?? 'no answer from node'}`, { to: 'debug' })
+      return
+    }
+    review = { port, token }
+    await update($, reviewUrl, () => `http://127.0.0.1:${port}/?t=${token}`)
+    await pushReview($)
+    void pollReviewActions($, port)
+  })().finally(() => {
+    reviewStarting = undefined
+  })
+  return reviewStarting
+}
+
+function schedulePushReview($: Engine) {
+  if (!review) return
+  reviewPushTimer?.cancel()
+  reviewPushTimer = $.clock.after(300, () => void pushReview($))
+}
+
+async function pushReview($: Engine) {
+  const server = review
+  if (!server) return
+  const s = await read($, snapshot)
+  const cwd = await $.session.cwd()
+  const behind = new Set(s.rows.filter(row => row.needsRestack).map(row => row.branch))
+  const payload = {
+    repo: cwd.split('/').pop(),
+    trunk: s.rows.find(row => row.isTrunk)?.branch,
+    current: s.branch,
+    generated: GENERATED.source,
+    focus: reviewFocus,
+    rows: s.rows.map(row => ({
+      branch: row.branch,
+      parent: row.parent,
+      isTrunk: row.isTrunk,
+      isCurrent: row.isCurrent,
+      needsRestack: row.needsRestack,
+      diff: row.diff,
+      lane: laneSvg(row.lane, s.columns, row.branch, row.pr ? prDot(row.pr) : undefined, owner => behind.has(owner), row.isCurrent).source,
+      pr: row.pr && {
+        number: row.pr.number,
+        title: row.pr.title,
+        url: row.pr.url,
+        graphiteUrl: graphiteUrl(row.pr),
+        state: row.pr.state,
+        isDraft: row.pr.isDraft,
+      },
+    })),
+  }
+  try {
+    const response = await $.http.fetch(`http://127.0.0.1:${server.port}/state?t=${server.token}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    reviewConnected = response.ok && (JSON.parse(response.text) as { isConnected?: boolean }).isConnected === true
+  } catch (error) {
+    $.ui.log(`review page update failed: ${String(error)}`, { to: 'debug' })
+  }
+}
+
+type ReviewComment = { path: string; line: number; side: 'old' | 'new'; text: string; code?: string }
+type ReviewAction = {
+  type: 'review'
+  branch: string
+  compareTo?: string
+  includesUncommitted?: boolean
+  summary?: string
+  comments: ReviewComment[]
+}
+
+function reviewPrompt(action: ReviewAction) {
+  const where = (c: ReviewComment) => `\`${c.path}:${c.line}\`${c.side === 'old' ? ' (removed line)' : ''}`
+  const items = action.comments.map(
+    (c, i) => `${i + 1}. ${where(c)}: ${c.text}${c.code?.trim() ? `\n   > ${c.code.trim()}` : ''}`,
+  )
+  return [
+    `Review feedback on the branch \`${action.branch}\`` +
+      (action.compareTo ? ` (its changes against \`${action.compareTo}\`` : '') +
+      (action.includesUncommitted ? ', including uncommitted changes)' : action.compareTo ? ')' : '') +
+      ':',
+    action.summary ? `\n${action.summary}` : '',
+    items.length ? `\n${items.join('\n')}` : '',
+    "\nAddress each point on that branch. Don't push anything.",
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
+
+async function pollReviewActions($: Engine, port: number) {
+  while (review?.port === port) {
+    try {
+      const response = await $.http.fetch(`http://127.0.0.1:${port}/actions?t=${review.token}`)
+      const actions = response.ok ? (JSON.parse(response.text) as ReviewAction[]) : []
+      for (const action of actions) {
+        if (action.type === 'review' && (action.comments.length || action.summary)) {
+          await $.prompt.submit({ text: reviewPrompt(action), asUser: true })
+        }
+      }
+    } catch {
+      await $.clock.sleep(2_000)
+    }
+  }
+}
+
+async function openReview($: Engine, branch?: string) {
+  await startReview($)
+  const url = await read($, reviewUrl)
+  if (!url) {
+    $.ui.toast("The review page couldn't start: it needs Node.js on Claude Code's PATH.", { timeoutMs: 8000 })
+    return
+  }
+  if (branch) reviewFocus = { branch, seq: Date.now() }
+  await pushReview($)
+  if (reviewConnected) {
+    $.ui.toast(branch ? `Showing ${branch} in the open review page` : 'The review page is already open')
+    return
+  }
+  const target = branch ? `${url}#branch=${encodeURIComponent(branch)}` : url
+  const cwd = await $.session.cwd()
+  for (const argv of [['open', target], ['xdg-open', target], ['cmd', '/c', 'start', '', target]]) {
+    const opened = await $.process.run(argv, { cwd }).catch(() => undefined)
+    if (opened?.exitCode === 0) return
+  }
+  $.ui.toast(`Open ${target} in your browser`, { timeoutMs: 15000 })
+}
+
 async function refresh($: Engine, mode: Mode) {
   if (isRefreshing) {
     queuedMode = stronger(queuedMode, mode)
@@ -661,7 +711,6 @@ async function refresh($: Engine, mode: Mode) {
       issue: ghIssue ?? (built.detached ? detachedIssue(built.detached, built.rows.find(row => row.isTrunk)?.branch ?? 'main') : undefined),
       isLoading: false,
     }))
-    void refreshDiff($)
     const failing = rows.filter(r => r.pr?.ci === 'fail').length
     $.ui.status(failing ? `stack: ${failing} PR${failing > 1 ? 's' : ''} failing CI` : undefined)
   } catch (error) {
@@ -670,6 +719,7 @@ async function refresh($: Engine, mode: Mode) {
     await update($, snapshot, s => ({ ...s, rows: error instanceof Problem ? [] : s.rows, issue, isLoading: false }))
   } finally {
     isRefreshing = false
+    schedulePushReview($)
     if (queuedMode) {
       const next = queuedMode
       queuedMode = undefined
@@ -944,7 +994,10 @@ export const register: Register = on => {
       name: 'stack',
       description: 'Show or hide the Graphite stack above the prompt',
     })
-    void refresh($, 'github').then(() => schedulePoll($))
+    void refresh($, 'github').then(async () => {
+      void schedulePoll($)
+      if ((await read($, snapshot)).rows.length > 1) void startReview($)
+    })
 
     return started
   })
@@ -980,177 +1033,10 @@ export const register: Register = on => {
     return ran
   })
 
-  on('ui.render', { component: 'Pane', requestId: DIFF_PANE }, async ($, e) => {
-    const elements = $.ui.resolve(e)
-    if (!('Select' in elements)) return <elements.Text dimColor>The diff view needs the Claude Code desktop app.</elements.Text>
-    const { Box, Text, Link, Code, Button, Select } = elements
-    const view = await read($, diffView)
-    if (!view?.branch) return <Text dimColor>Hover a branch's line counts and click View diff to see its changes.</Text>
-    const order = stackOrder((await read($, snapshot)).rows)
-    const at = order.findIndex(row => row.branch === view.branch)
-    const previous = at > 0 ? order[at - 1] : undefined
-    const following = at >= 0 ? order[at + 1] : undefined
-    const added = view.files.reduce((sum, file) => sum + file.added, 0)
-    const removed = view.files.reduce((sum, file) => sum + file.removed, 0)
-    const collapsed = new Set(view.collapsed)
-    const setCollapsed = (paths: string[]) => void update($, diffView, v => (v ? { ...v, collapsed: paths } : v))
-    const toggle = (path: string) =>
-      setCollapsed(collapsed.has(path) ? view.collapsed.filter(p => p !== path) : [...view.collapsed, path])
-    const base = view.compareTo === 'trunk' ? view.trunk : view.parent
-    let budget = DIFF_DRAW_BUDGET
-
-    return (
-      <Box flexDirection="column" gap={1}>
-        <Box flexDirection="column">
-          <Box flexDirection="row" alignItems="center" gap={1}>
-            {previous && (
-              <Box flexShrink={0}>
-                <Button key="diff-previous" plain label="◀" onPress={() => void openDiff($, previous)} />
-              </Box>
-            )}
-            <Box flexGrow={1} flexShrink={1} minWidth={0}>
-              <Text bold wrap="truncate-end">{view.title}</Text>
-            </Box>
-            {following && (
-              <Box flexShrink={0}>
-                <Button key="diff-next" plain label="▶" onPress={() => void openDiff($, following)} />
-              </Box>
-            )}
-          </Box>
-          <Text dimColor>
-            {view.isLoading
-              ? 'loading…'
-              : `${view.files.length} file${view.files.length === 1 ? '' : 's'} · +${added} −${removed} · ` +
-                `${view.commits.length} commit${view.commits.length === 1 ? '' : 's'} · ` +
-                `${at + 1} of ${order.length} in the stack`}
-          </Text>
-        </Box>
-        <Box flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
-          <Select
-            key="diff-compare"
-            label="Compare to"
-            value={view.compareTo}
-            options={[
-              { value: 'parent', label: `parent (${view.parent})` },
-              { value: 'trunk', label: view.trunk },
-            ]}
-            onSelect={value => {
-              const row = order[at]
-              if (row) void openDiff($, row, { compareTo: value === 'trunk' ? 'trunk' : 'parent' })
-            }}
-          />
-          <Select
-            key="diff-whitespace"
-            label="Whitespace"
-            value={view.showWhitespace ? 'shown' : 'ignored'}
-            options={[
-              { value: 'ignored', label: 'ignored' },
-              { value: 'shown', label: 'shown' },
-            ]}
-            onSelect={value => {
-              const row = order[at]
-              if (row) void openDiff($, row, { showWhitespace: value === 'shown' })
-            }}
-          />
-          <Button key="diff-expand-all" plain label="Expand all" onPress={() => setCollapsed([])} />
-          <Button key="diff-collapse-all" plain label="Collapse all" onPress={() => setCollapsed(view.files.map(f => f.path))} />
-        </Box>
-        {view.error && <Text color="error">{view.error}</Text>}
-        {view.commits.length > 0 && (
-          <Box flexDirection="column">
-            <Text dimColor>Commits since {base}</Text>
-            {view.commits.map(commit => (
-              <Box flexDirection="row" gap={1}>
-                <Text dimColor>{commit.sha}</Text>
-                <Text wrap="truncate-end">{commit.subject}</Text>
-              </Box>
-            ))}
-          </Box>
-        )}
-        {view.files.length > 1 && (
-          <Box flexDirection="column">
-            <Text dimColor>Files</Text>
-            {view.files.map((file, i) => (
-              <Box flexDirection="row" gap={1}>
-                <Box flexGrow={1} flexShrink={1} minWidth={0}>
-                  <Button
-                    key={`jump-${i}`}
-                    plain
-                    dimColor={file.isGenerated}
-                    label={file.path}
-                    onPress={() => {
-                      if (collapsed.has(file.path)) toggle(file.path)
-                      void $.ui.scroll({ in: DIFF_PANE, to: { key: `file-${i}` } })
-                    }}
-                  />
-                </Box>
-                <Text color="success">+{file.added}</Text>
-                <Text color="error">−{file.removed}</Text>
-              </Box>
-            ))}
-          </Box>
-        )}
-        {view.files.map((file, i) => {
-          const isOpen = !collapsed.has(file.path)
-          const size = file.hunks.length
-          const fits = size <= budget
-          if (isOpen && fits) budget -= size
-          return (
-            <Box key={`file-${i}`} flexDirection="column">
-              <Box flexDirection="row" alignItems="center" gap={1}>
-                <Box flexShrink={0}>
-                  <Button key={`toggle-${i}`} plain label={isOpen ? '▾' : '▸'} onPress={() => toggle(file.path)} />
-                </Box>
-                <Box flexShrink={1} minWidth={0}>
-                  {view.root ? (
-                    <Link href={`file://${view.root}/${file.path}`}>
-                      <Text bold wrap="truncate-start">{file.path}</Text>
-                    </Link>
-                  ) : (
-                    <Text bold wrap="truncate-start">{file.path}</Text>
-                  )}
-                </Box>
-                {file.isNew && <Text color="success">new</Text>}
-                {file.isGenerated && <Text dimColor>generated</Text>}
-                <Text color="success">+{file.added}</Text>
-                <Text color="error">−{file.removed}</Text>
-                <Box flexGrow={1} />
-                <Box flexShrink={0}>
-                  <Button
-                    key={`ask-${i}`}
-                    plain
-                    dimColor
-                    label="Ask Claude"
-                    onPress={() =>
-                      void $.prompt.submit({
-                        text:
-                          `Review the changes to \`${file.path}\` in ${view.title} (branch \`${view.branch}\`, compared to \`${base}\`). ` +
-                          'Explain what changed, and point out bugs, risks or anything unclear.',
-                        asUser: true,
-                      })
-                    }
-                  />
-                </Box>
-              </Box>
-              {!isOpen ? null : file.isBinary ? (
-                <Text dimColor>binary file</Text>
-              ) : file.isTooLarge || !fits ? (
-                <Box flexDirection="row" gap={1}>
-                  <Text dimColor>
-                    {file.isTooLarge ? 'too large to show here' : 'collapse other files to show this one'}
-                  </Text>
-                  {view.url && <Link href={`${view.url}/files`} label="open on GitHub" />}
-                </Box>
-              ) : file.isNew ? (
-                file.hunks && <Code source={file.hunks} language={languageOf(file.path)} path={file.path} startLine={1} />
-              ) : (
-                file.hunks && <Code source={file.hunks} format="diff" language={languageOf(file.path)} path={file.path} />
-              )}
-            </Box>
-          )
-        })}
-      </Box>
-    )
+  on('tool.call', { tool: /^(Edit|Write|MultiEdit|NotebookEdit)$/ }, async ($, e, next) => {
+    const ran = await next(e)
+    schedulePushReview($)
+    return ran
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
@@ -1200,6 +1086,7 @@ export const register: Register = on => {
               void $.store.set('linkTarget', target)
             }}
           />
+          <Button key="review" plain dimColor label="Review stack" onPress={() => void openReview($, s.branch)} />
           <Button
             key="sync"
             plain
@@ -1349,7 +1236,7 @@ export const register: Register = on => {
                   <Box key={`diff-${row.branch}`} flexShrink={0} justifyContent="flex-end">
                     <Svg source={stat.source} alt={stat.alt} width={stat.width} height={ROW} />
                     <Box position="absolute" top={0} right={0} display="none" hover={{ display: 'flex' }}>
-                      <Button key={`open-diff-${row.branch}`} plain label="View diff" onPress={() => void openDiff($, row)} />
+                      <Button key={`review-${row.branch}`} plain label="Review ↗" onPress={() => void openReview($, row.branch)} />
                     </Box>
                   </Box>
                 )

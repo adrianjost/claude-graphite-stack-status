@@ -16,7 +16,7 @@ One row per branch, drawn as the same tree `gt log` draws, from the branch above
 | **Small number** | unresolved review conversations |
 | **↻ restack** | the branch is no longer based on its parent's head, and its line to the parent is dotted; click it to have Claude restack it |
 | **Badges** | the PR's GitHub labels, in their colors; hover one for its description; when they don't fit, `+N` shows the rest on hover |
-| **+12 −3** | lines added and removed against the parent branch, ignoring whitespace; hover and click **View diff** to see the diff in a side pane |
+| **+12 −3** | lines added and removed against the parent branch, ignoring whitespace; hover and click **Review ↗** to open that branch on the review page |
 
 The title links to the PR. GitHub data refreshes every minute, every 30 seconds while CI is running, and every 5 minutes after 10 quiet minutes. It also refreshes right after Claude runs `git push`, `gt submit`, `gt sync` or `gh pr …`. Other `git`/`gt` commands only re-read the local stack. Sessions on the same repo share results, and polling pauses while no app window shows the session. When any PR fails CI, the status line says so.
 
@@ -36,6 +36,7 @@ Answer `y` to add the marketplace, then pick a scope.
 - [`gt`](https://graphite.dev/docs/install-the-cli) tracking your branches (the plugin reads Graphite's local metadata, `.git/.graphite_metadata.db`)
 - [`gh`](https://cli.github.com), signed in to the repository's GitHub host
 - `sqlite3` and `git` on your `PATH`
+- [Node.js](https://nodejs.org) on your `PATH` for the review page (optional)
 
 ## Usage
 
@@ -44,16 +45,18 @@ The band appears on its own whenever the session's branch belongs to a Graphite 
 - `/stack` shows or hides it
 - click the band, then press `R` to refresh or `H` to hide
 
-## Diff pane
+## Review page
 
-Hover a branch's line counts and click **View diff** to open its changes in a side pane:
+**Review stack** in the band's header, or **Review ↗** on a branch's line counts, opens a live review page for the stack in your browser. Keep it open: it follows the session as Claude works, and when it's open those buttons switch it to the branch instead of opening another tab.
 
-- **Overview:** the branch's commits and a file list. Click a file to jump to it.
-- **Collapsible files:** fold files one by one, or use **Expand all** / **Collapse all**. Lockfiles and generated files start collapsed.
-- **Stack navigation:** ◀ / ▶ step through the stack's PRs in order.
-- **Options:** compare against the parent branch or trunk, and ignore or show whitespace changes.
-- **Ask Claude:** each file has a button to have Claude review or explain its changes.
-- **Live:** the diff reloads when the branch changes, for example after a restack.
+- The stack graph on the left switches between branches (or press `[` and `]`).
+- Diffs are GitHub-style: unified or split, with syntax highlighting, highlighted changed words and expandable context. Compare against the parent branch or trunk and hide whitespace.
+- On the checked-out branch, switch between all changes, committed only and uncommitted only. In the combined view, uncommitted lines get an orange dot and their files an **Uncommitted** badge.
+- Generated and very large files are left out until you show them. Mark files as viewed; the mark resets when the file changes.
+- Click a line number to leave an inline comment, then **Review** → **Send to Claude** hands all comments and an overall note to Claude in the session.
+- The page updates live after commits, restacks and Claude's file edits.
+
+Each session serves its own page on `127.0.0.1` with a fixed port, so several review pages can be open at once and an open tab reconnects after a restart. Requests need a random token in the page's URL, and other sites can't call it.
 
 ## Keeping the stack current
 
