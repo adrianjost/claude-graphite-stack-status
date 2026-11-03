@@ -1715,3 +1715,52 @@ td.code:not(.empty) {
 .file-head .path {
   user-select: text;
 }
+
+.tip {
+  position: fixed;
+  top: var(--y);
+  left: var(--x);
+  z-index: 60;
+  transform: translateX(-50%);
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  color: #fff;
+  background: #1f2328;
+  border-radius: 6px;
+  pointer-events: none;
+  animation: tip-in 120ms ease-out;
+}
+
+.tip::before {
+  content: '';
+  position: absolute;
+  top: -4px;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  background: inherit;
+  transform: translateX(-50%) rotate(45deg);
+}
+
+@media (prefers-color-scheme: dark) {
+  .tip {
+    color: #1f2328;
+    background: #f0f6fc;
+  }
+}
+
+@keyframes tip-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -3px);
+  }
+}
+
+.offscreen {
+  position: fixed;
+  top: 0;
+  left: -9999px;
+  opacity: 0;
+}

@@ -1171,6 +1171,37 @@ function scrollToFile(path) {
   if (card) window.scrollTo({ top: card.getBoundingClientRect().top + window.scrollY - $('#header').offsetHeight - 8 })
 }
 
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text)
+    return
+  } catch {}
+  const field = document.createElement('textarea')
+  field.value = text
+  field.setAttribute('readonly', '')
+  field.className = 'offscreen'
+  document.body.append(field)
+  field.select()
+  const ok = document.execCommand('copy')
+  field.remove()
+  if (!ok) throw new Error('copy refused')
+}
+
+function showTip(anchor, text) {
+  const rect = anchor.getBoundingClientRect()
+  const tip = document.createElement('div')
+  tip.className = 'tip'
+  tip.textContent = text
+  document.body.append(tip)
+  tip.style.setProperty('--x', `${rect.left + rect.width / 2}px`)
+  tip.style.setProperty('--y', `${rect.bottom + 6}px`)
+  anchor.classList.add('copied')
+  setTimeout(() => {
+    tip.remove()
+    anchor.classList.remove('copied')
+  }, 1400)
+}
+
 /* reviewer picker */
 
 let picker = null
@@ -1347,10 +1378,10 @@ document.addEventListener('click', event => {
     renderHeader()
   }
   if (d.copy) {
-    navigator.clipboard?.writeText(d.copy)
-    el.classList.add('copied')
-    el.title = 'Copied'
-    setTimeout(() => el.classList.remove('copied'), 1200)
+    copyText(d.copy).then(
+      () => showTip(el, 'Copied to clipboard'),
+      () => showTip(el, "Couldn't copy"),
+    )
   }
   if (d.goto) {
     const file = files.find(f => f.path === d.goto)
