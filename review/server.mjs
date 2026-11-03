@@ -21,6 +21,7 @@ let actionWaiters = []
 let nextActionId = 1
 const delivered = new Map()
 let lastSeen = 0
+let focusSeen = 0
 
 function hasToken(value) {
   const given = Buffer.from(String(value ?? ''))
@@ -126,7 +127,13 @@ async function diffFor(query) {
       const [sha, subject, author, when] = line.split('\x1f')
       return { sha, subject, author, when }
     })
-  return { branch: row.branch, parent, base, head, diff, pending: mode === 'all' ? pending : '', commits, isCurrent, dirty, mode, includeWorktree }
+  let draft
+  if (!row.pr) {
+    const first = await git(['log', '--no-color', '--reverse', '--format=%s%x1f%b%x1e', `${base}..${row.branch}`])
+    const [title = '', body = ''] = (first.stdout.split('\x1e')[0] ?? '').replace(/^\n/, '').split('\x1f')
+    if (title.trim()) draft = { title: title.trim(), body: body.trim() }
+  }
+  return { branch: row.branch, parent, base, head, diff, pending: mode === 'all' ? pending : '', commits, isCurrent, dirty, mode, includeWorktree, draft }
 }
 
 async function fileFor(query) {
@@ -171,6 +178,11 @@ const server = http.createServer(async (req, res) => {
       lastSeen = Date.now()
       return send(res, 200, state)
     }
+    if (url.pathname === '/focus-seen' && req.method === 'POST') {
+      focusSeen = Number((await readBody(req, 1024)).seq) || 0
+      return send(res, 200, { ok: true })
+    }
+    if (url.pathname === '/focus-seen') return send(res, 200, { seq: focusSeen })
     if (url.pathname === '/diff') return send(res, 200, await diffFor(url.searchParams))
     if (url.pathname === '/file') return send(res, 200, await fileFor(url.searchParams))
     if (url.pathname === '/action' && req.method === 'POST') {

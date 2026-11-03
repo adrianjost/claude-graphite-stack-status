@@ -54,6 +54,7 @@ export type StackSnapshot = {
   columns: number
   updatedAt: number
   isStale?: boolean
+  hold?: string
   issue?: Issue
   githubIssue?: Issue
   isLoading: boolean

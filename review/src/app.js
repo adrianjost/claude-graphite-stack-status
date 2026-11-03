@@ -604,18 +604,30 @@ let descriptionOpen = false
 
 function renderDescription() {
   const section = $('#description')
-  const body = selectedRow()?.pr?.bodyHtml?.trim() ?? ''
-  section.hidden = !body
-  if (!body) {
+  const pr = selectedRow()?.pr
+  const draftBody = !pr && current?.branch === selected ? (current?.draft?.body ?? '') : ''
+  const body = pr ? (pr.bodyHtml?.trim() ?? '') : draftBody
+  const showDraft = !pr && !!current?.draft
+  section.hidden = !body && !showDraft
+  section.classList.toggle('draft', !pr)
+  if (section.hidden) {
     descriptionHtml = null
     return
   }
-  if (body !== descriptionHtml) {
-    descriptionHtml = body
-    section.querySelector('.description-body').innerHTML = DOMPurify.sanitize(body.replace(/\sstyle=("[^"]*"|'[^']*')/gi, ''), {
-      FORBID_TAGS: ['style', 'form', 'iframe', 'object', 'embed'],
-      FORBID_ATTR: ['style'],
-    })
+  const key = `${pr ? 'html' : 'text'}:${body}`
+  if (key !== descriptionHtml) {
+    descriptionHtml = key
+    const target = section.querySelector('.description-body')
+    if (pr) {
+      target.innerHTML = DOMPurify.sanitize(body.replace(/\sstyle=("[^"]*"|'[^']*')/gi, ''), {
+        FORBID_TAGS: ['style', 'form', 'iframe', 'object', 'embed'],
+        FORBID_ATTR: ['style'],
+      })
+    } else {
+      target.innerHTML = `<p class="draft-note">Preview from the first commit's message, which becomes the PR title and description.</p>${
+        body ? `<div class="commit-body">${esc(body)}</div>` : '<p class="muted">The commit message has no body.</p>'
+      }`
+    }
   }
   const inner = section.querySelector('.description-body')
   section.classList.toggle('open', descriptionOpen)
@@ -754,7 +766,8 @@ function updateIdentity() {
   const href = `data:image/svg+xml,${encodeURIComponent(icon)}`
   if (link.getAttribute('href') !== href) link.setAttribute('href', href)
   const row = selectedRow()
-  const label = row?.pr ? `#${row.pr.number} ${row.pr.title}` : shortBranch(selected) || 'Review'
+  const draftTitle = current?.branch === selected ? current?.draft?.title : undefined
+  const label = row?.pr ? `#${row.pr.number} ${row.pr.title}` : draftTitle || shortBranch(selected) || 'Review'
   const pendingCountNow = pendingCount()
   document.title = `${pendingCountNow ? `(${pendingCountNow}) ` : ''}${label} · ${name}`
 }
@@ -776,7 +789,9 @@ function renderHeader() {
         <a class="btn icon invisible" href="${esc(pr.url)}" target="_blank" rel="noreferrer" title="Open on GitHub">${ICONS.github}</a>
         ${pr.graphiteUrl ? `<a class="btn icon invisible" href="${esc(pr.graphiteUrl)}" target="_blank" rel="noreferrer" title="Open on Graphite">${ICONS.graphite}</a>` : ''}
       </span>`
-    : esc(row.branch)
+    : current?.draft?.title && current.branch === row.branch
+      ? `${esc(current.draft.title)} <span class="num">no PR yet</span>`
+      : esc(row.branch)
   const base = current?.parent ?? (prefs.compare === 'trunk' ? state.trunk : row.parent)
   const totals = files.reduce((sum, f) => ({ added: sum.added + f.added, removed: sum.removed + f.removed }), { added: 0, removed: 0 })
   const order = stackRows()
@@ -784,7 +799,12 @@ function renderHeader() {
   const pressed = on => `aria-pressed="${on}"`
   const allClosed = files.length > 0 && files.every(isCollapsed)
   $('#header').innerHTML = `
-    ${pr ? prInfo(pr) : ''}
+    ${
+      pr
+        ? prInfo(pr)
+        : `<div class="pr-info"><span class="state none">No PR yet</span>
+            <button class="btn small" data-act="submit-branch">Submit as draft PR</button></div>`
+    }
     <h1>${title}</h1>
     <div class="meta">
       ${
@@ -1070,6 +1090,18 @@ async function waitForDelivery(id) {
     await new Promise(resolve => setTimeout(resolve, 1000))
   }
   return null
+}
+
+async function submitBranch(button) {
+  button.disabled = true
+  button.textContent = 'Asking Claude…'
+  const result = await runAction({ type: 'submit-branch', branch: selected }).catch(() => null)
+  button.textContent = result?.ok ? 'Claude is submitting it ✓' : 'Claude Code did not answer'
+  setTimeout(() => {
+    if (!button.isConnected) return
+    button.disabled = false
+    button.textContent = 'Submit as draft PR'
+  }, 5000)
 }
 
 async function setReady(button) {
@@ -1427,6 +1459,7 @@ document.addEventListener('click', event => {
     renderAll()
   }
   if (d.act === 'pr-ready') setReady(el)
+  if (d.act === 'submit-branch') submitBranch(el)
   if (d.act === 'reviewers') {
     if (picker) closePicker()
     else openPicker(el)
@@ -1578,6 +1611,7 @@ async function poll() {
       if (state.focus && state.focus.seq !== lastFocus) {
         if (lastFocus !== null || !selected) select(state.focus.branch)
         lastFocus = state.focus.seq
+        api('/focus-seen', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ seq: lastFocus }) }).catch(() => {})
       }
       if (!state.rows.some(r => r.branch === selected && !r.isTrunk)) {
         const fallback = state.rows.find(r => r.isCurrent && !r.isTrunk) ?? stackRows()[0]

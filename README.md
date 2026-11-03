@@ -54,6 +54,7 @@ The band appears on its own whenever the session's branch belongs to a Graphite 
 - Diffs are GitHub-style: split (default) or unified, with syntax highlighting, highlighted changed words and expandable context. Compare against the parent branch or trunk and hide whitespace.
 - On the checked-out branch, switch between all changes, committed only and uncommitted only. In the combined view, uncommitted lines get an orange dot and their files an **Uncommitted** badge.
 - Generated and very large files are left out until you show them. Mark files as viewed; the mark resets when the file changes.
+- For a branch without a PR, the page previews the PR from the branch's first commit: its title as the heading and its body as the description, which you can comment on. **Submit as draft PR** asks Claude to submit the branch with Graphite.
 - Click a code line, drag over line numbers, or shift-click a second line to leave an inline comment on one or more lines. A review covers one stack layer: **Review** lists the layer's pending comments, and **Send to Claude** hands them plus an overall note to Claude in the session, naming the layer, its branch and PR, and confirms once Claude Code picked them up.
 - Sent comments stay as a history: **Comments** lists pending and sent comments for the whole stack and jumps to each one. On the diff, sent comments show as faded cards, marked *Outdated* once their lines changed; dismiss them one by one, clear the history, or hide them from the diff.
 - The page updates live after commits, restacks and Claude's file edits.

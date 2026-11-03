@@ -609,7 +609,8 @@ type ReviewComment = {
 type PrReadyAction = { type: 'pr-ready'; number: number; ready: boolean }
 type ReviewersLoadAction = { type: 'reviewers-load'; number: number; query?: string }
 type ReviewersSetAction = { type: 'reviewers-set'; number: number; add: string[]; remove: string[] }
-type PageAction = ReviewAction | PrReadyAction | ReviewersLoadAction | ReviewersSetAction
+type SubmitBranchAction = { type: 'submit-branch'; branch: string }
+type PageAction = ReviewAction | PrReadyAction | ReviewersLoadAction | ReviewersSetAction | SubmitBranchAction
 type ActionResult = { ok: boolean; message?: string; data?: unknown }
 
 const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/
@@ -698,11 +699,12 @@ function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
       ':',
     action.summary ? `\n${action.summary}` : '',
     notes.length
-      ? `\nOn the PR description:\n${notes.map((c, i) => `${i + 1}. ${c.text}${quote(c.quote)}`).join('\n')}`
+      ? `\nOn the ${pr ? 'PR description' : 'commit message (the future PR description)'}:\n${notes.map((c, i) => `${i + 1}. ${c.text}${quote(c.quote)}`).join('\n')}`
       : '',
     comments.length ? `\n${notes.length ? 'On the code:\n' : ''}${comments.map((c, i) => `${i + 1}. ${where(c)}: ${c.text}${quote(c.code)}`).join('\n')}` : '',
     `\nAddress each point on its branch.` +
       (notes.length && pr ? ' Apply the description points by editing the PR description on GitHub, changing only what they ask for.' : '') +
+      (notes.length && !pr ? " Apply the description points to the branch's commit message, which becomes the PR title and description." : '') +
       " Don't push any code.",
   ]
     .filter(Boolean)
@@ -728,6 +730,25 @@ async function pollReviewActions($: Engine, port: number) {
     for (const action of actions) {
       if (!handled.has(action.id) && action.type === 'reviewers-load' && Number.isInteger(action.number)) {
         results[action.id] = await loadReviewers($, action.number, action.query).catch(error => ({ ok: false, message: String(error) }))
+      }
+      if (!handled.has(action.id) && action.type === 'submit-branch') {
+        const rows = (await read($, snapshot)).rows
+        const row = rows.find(r => r.branch === action.branch && !r.isTrunk)
+        if (!row) results[action.id] = { ok: false, message: 'That branch is not part of the stack.' }
+        else {
+          try {
+            await $.prompt.submit({
+              text:
+                `Submit ${layerLabel(rows, row.branch)} to GitHub with Graphite (\`gt submit\` for that branch), ` +
+                'opening its PR as a draft and submitting unsubmitted layers below it as needed. ' +
+                "Use the commit message as the PR title and description, and don't change any code.",
+              asUser: true,
+            })
+            results[action.id] = { ok: true }
+          } catch (error) {
+            results[action.id] = { ok: false, message: String(error) }
+          }
+        }
       }
       if (!handled.has(action.id) && action.type === 'reviewers-set' && Number.isInteger(action.number)) {
         results[action.id] = await setReviewers($, action).catch(error => ({ ok: false, message: String(error) }))
@@ -758,6 +779,17 @@ async function pollReviewActions($: Engine, port: number) {
   }
 }
 
+async function pageConfirmed($: Engine, seq: number) {
+  const server = review
+  if (!server) return false
+  for (let i = 0; i < 10; i++) {
+    const response = await $.http.fetch(`http://127.0.0.1:${server.port}/focus-seen?t=${server.token}`).catch(() => undefined)
+    if (response?.ok && (JSON.parse(response.text) as { seq: number }).seq === seq) return true
+    await $.clock.sleep(250)
+  }
+  return false
+}
+
 async function openReview($: Engine, branch?: string) {
   await startReview($)
   const url = await read($, reviewUrl)
@@ -765,10 +797,11 @@ async function openReview($: Engine, branch?: string) {
     $.ui.toast("The review page couldn't start: it needs Node.js on Claude Code's PATH.", { timeoutMs: 8000 })
     return
   }
-  if (branch) reviewFocus = { branch, seq: Date.now() }
+  const seq = Date.now()
+  reviewFocus = { branch: branch ?? (await read($, snapshot)).branch, seq }
   await pushReview($)
-  if (reviewConnected) {
-    $.ui.toast(branch ? `Showing ${branch} in the open review page` : 'The review page is already open')
+  if (reviewConnected && (await pageConfirmed($, seq))) {
+    $.ui.toast(branch ? `Showing ${branch} in the open review page` : 'Switched the open review page')
     return
   }
   const target = branch ? `${url}#branch=${encodeURIComponent(branch)}` : url
@@ -802,6 +835,13 @@ async function refresh($: Engine, mode: Mode) {
     await update($, snapshot, s => ({ ...s, isLoading: true }))
     const built = branch ? await buildRows($, cwd, branch) : 'Detached HEAD.'
     if (typeof built === 'string') {
+      const held = await read($, snapshot)
+      const trunk = held.rows.find(row => row.isTrunk)?.branch
+      if (held.rows.length && (!branch || branch === trunk)) {
+        await update($, snapshot, s => ({ ...s, hold: branch ? `on ${branch}` : 'rebasing…', isLoading: false }))
+        $.clock.after(3_000, () => requestRefresh($, 'local'))
+        return
+      }
       await update($, snapshot, () => ({ branch, rows: [], columns: 1, updatedAt: Date.now(), isLoading: false }))
       return
     }
@@ -854,10 +894,12 @@ async function refresh($: Engine, mode: Mode) {
       columns: built.columns,
       updatedAt: prs ? Date.now() : s.updatedAt,
       isStale,
+      hold: undefined,
       githubIssue: ghIssue,
       issue: ghIssue ?? (built.detached ? detachedIssue(built.detached, built.rows.find(row => row.isTrunk)?.branch ?? 'main') : undefined),
       isLoading: false,
     }))
+    if (rows.length > 1 && !review) void startReview($)
     const failing = rows.filter(r => r.pr?.ci === 'fail').length
     $.ui.status(failing ? `stack: ${failing} PR${failing > 1 ? 's' : ''} failing CI` : undefined)
   } catch (error) {
@@ -1209,7 +1251,7 @@ export const register: Register = on => {
     const summary = [
       `${prs.length} PR${prs.length === 1 ? '' : 's'}`,
       failing ? `${failing} failing` : '',
-      busy ?? (s.isLoading ? 'refreshing…' : ''),
+      busy ?? s.hold ?? (s.isLoading ? 'refreshing…' : ''),
 
     ].filter(Boolean).join(' · ')
 

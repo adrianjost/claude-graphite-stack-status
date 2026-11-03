@@ -259,7 +259,7 @@ code.hljs {
   --del-word: #ffcecb;
   --hunk: #ddf4ff;
   --hunk-text: #59636e;
-  --hatch: #e5e9ed;
+  --empty: #f6f8fa;
   --shadow: 0 1px 3px rgba(31, 35, 40, 0.12), 0 8px 24px rgba(66, 74, 83, 0.12);
   --mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
   color-scheme: light;
@@ -287,7 +287,7 @@ code.hljs {
     --del-word: rgba(248, 81, 73, 0.4);
     --hunk: rgba(56, 139, 253, 0.1);
     --hunk-text: #9198a1;
-    --hatch: #212830;
+    --empty: #151b23;
     --shadow: 0 0 0 1px #3d444d, 0 8px 24px rgba(1, 4, 9, 0.85);
     color-scheme: dark;
   }
@@ -857,16 +857,8 @@ td.ln.del {
   color: var(--text);
 }
 
-table.diff {
-  background: repeating-linear-gradient(-45deg, transparent 0 5px, var(--hatch) 5px 6px), var(--bg);
-}
-
-:where(table.diff) td {
-  background-color: var(--bg);
-}
-
 table.diff td.empty {
-  background: transparent;
+  background: var(--empty);
 }
 
 table.diff.split td.code.old {
@@ -1081,7 +1073,7 @@ tr.thread td {
 
 .file.half .file-body {
   display: flex;
-  background: repeating-linear-gradient(-45deg, transparent 0 5px, var(--hatch) 5px 6px);
+  background: var(--empty);
 }
 
 .file.half.new-side .file-body {
@@ -1771,4 +1763,21 @@ td.code:not(.empty) {
   top: 0;
   left: -9999px;
   opacity: 0;
+}
+
+.state.none {
+  color: var(--muted);
+  background: var(--canvas);
+  border: 1px solid var(--border);
+}
+
+.draft-note {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.commit-body {
+  white-space: pre-wrap;
+  font-size: 14px;
 }
