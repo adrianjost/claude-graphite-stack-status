@@ -29,7 +29,12 @@
       <header id="header"></header>
       <section id="description" hidden>
         <div class="description-body markdown"></div>
-        <button class="btn invisible description-toggle" data-act="toggle-description">Show all</button>
+        <div class="description-actions">
+          <button class="btn invisible description-toggle" data-act="toggle-description">Show all</button>
+          <span class="spacer"></span>
+          <button class="btn" data-act="describe" title="Select text in the description first to quote it">Comment on description</button>
+        </div>
+        <div class="description-threads"></div>
       </section>
       <div id="notice"></div>
       <div id="diff"></div>
@@ -42,6 +47,12 @@
         <button class="btn primary" data-act="send">Send to Claude</button>
       </div>
       <div id="submit-list"></div>
+    </div>
+    <div id="picker" hidden>
+      <div class="picker-head"><strong>Request up to 15 reviewers</strong></div>
+      <div class="picker-search"><input type="search" placeholder="Find a user" autocomplete="off" /></div>
+      <div class="picker-list"></div>
+      <div class="picker-foot muted"></div>
     </div>
     <aside id="comments-panel" hidden>
       <div class="panel-head">

@@ -186,7 +186,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { delivered: delivered.has(id), result: delivered.get(id), pending: actions.some(a => a.id === id) })
     }
     if (url.pathname === '/actions' && req.method === 'POST') {
-      const { ids = [], results = {} } = await readBody(req, 64 * 1024)
+      const { ids = [], results = {} } = await readBody(req, 1024 * 1024)
       for (const id of ids) delivered.set(id, results[id] ?? { ok: true })
       actions = actions.filter(a => !ids.includes(a.id))
       return send(res, 200, { ok: true })

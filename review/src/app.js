@@ -15,6 +15,7 @@ const ICONS = {
   up: '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M3.47 7.78a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0l4.25 4.25a.751.751 0 0 1-.018 1.042.751.751 0 0 1-1.042.018L9 4.81v7.44a.75.75 0 0 1-1.5 0V4.81L4.53 7.78a.75.75 0 0 1-1.06 0Z"/></svg>',
   github: '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg>',
   graphite: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.2 13.9 4.6v6.8L8 14.8 2.1 11.4V4.6Z"/><path d="M8 4.6 10.95 6.3v3.4L8 11.4 5.05 9.7V6.3Z" fill="currentColor" stroke="none"/></svg>',
+  gear: '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0a8.2 8.2 0 0 1 .701.031C9.444.095 9.99.645 10.16 1.29l.288 1.107c.018.066.079.158.212.224.231.114.454.243.668.386.123.082.233.09.299.071l1.103-.303c.644-.176 1.392.021 1.82.63.27.385.506.792.704 1.218.315.675.111 1.422-.364 1.891l-.814.806c-.049.048-.098.147-.088.294.016.257.016.515 0 .772-.01.147.038.246.088.294l.814.806c.475.469.679 1.216.364 1.891a7.977 7.977 0 0 1-.704 1.217c-.428.61-1.176.807-1.82.63l-1.102-.302c-.067-.019-.177-.011-.3.071a5.909 5.909 0 0 1-.668.386c-.133.066-.194.158-.211.224l-.29 1.106c-.168.646-.715 1.196-1.458 1.26a8.006 8.006 0 0 1-1.402 0c-.743-.064-1.289-.614-1.458-1.26l-.289-1.106c-.018-.066-.079-.158-.212-.224a5.738 5.738 0 0 1-.668-.386c-.123-.082-.233-.09-.299-.071l-1.103.303c-.644.176-1.392-.021-1.82-.63a8.12 8.12 0 0 1-.704-1.218c-.315-.675-.111-1.422.363-1.891l.815-.806c.05-.048.098-.147.088-.294a6.214 6.214 0 0 1 0-.772c.01-.147-.038-.246-.088-.294l-.815-.806C.635 6.045.431 5.298.746 4.623a7.92 7.92 0 0 1 .704-1.217c.428-.61 1.176-.807 1.82-.63l1.102.302c.067.019.177.011.3-.071.214-.143.437-.272.668-.386.133-.066.194-.158.211-.224l.29-1.106C6.009.645 6.556.095 7.299.03 7.53.01 7.764 0 8 0Zm-.571 1.525c-.036.003-.108.036-.137.146l-.289 1.105c-.147.561-.549.967-.998 1.189-.173.086-.34.183-.5.29-.417.278-.97.423-1.529.27l-1.103-.303c-.109-.03-.175.016-.195.045-.22.312-.412.644-.573.99-.014.031-.021.11.059.19l.815.806c.411.406.562.957.53 1.456a4.709 4.709 0 0 0 0 .582c.032.499-.119 1.05-.53 1.456l-.815.806c-.081.08-.073.159-.059.19.162.346.353.677.573.989.02.03.085.076.195.046l1.102-.303c.56-.153 1.113-.008 1.53.27.161.107.328.204.501.29.447.222.85.629.997 1.189l.289 1.105c.029.109.101.143.137.146a6.6 6.6 0 0 0 1.142 0c.036-.003.108-.036.137-.146l.289-1.105c.147-.561.549-.967.998-1.189.173-.086.34-.183.5-.29.417-.278.97-.423 1.529-.27l1.103.303c.109.029.175-.016.195-.045.22-.313.411-.644.573-.99.014-.031.021-.11-.059-.19l-.815-.806c-.411-.406-.562-.957-.53-1.456a4.709 4.709 0 0 0 0-.582c-.032-.499.119-1.05.53-1.456l.815-.806c.081-.08.073-.159.059-.19a6.464 6.464 0 0 0-.573-.989c-.02-.03-.085-.076-.195-.046l-1.102.303c-.56.153-1.113.008-1.53-.27a4.44 4.44 0 0 0-.501-.29c-.447-.222-.85-.629-.997-1.189l-.289-1.105c-.029-.11-.101-.143-.137-.146a6.6 6.6 0 0 0-1.142 0ZM11 8a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM9.5 8a1.5 1.5 0 1 0-3.001.001A1.5 1.5 0 0 0 9.5 8Z"/></svg>',
   downArrow: '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M13.03 8.22a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L3.47 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018l2.97 2.97V3.75a.75.75 0 0 1 1.5 0v7.44l2.97-2.97a.75.75 0 0 1 1.06 0Z"/></svg>',
 }
 
@@ -95,6 +96,7 @@ function select(branch) {
   expansions = new Map()
   composer = null
   descriptionOpen = false
+  describing = null
   comments = stored(`comments:${branch}`, [])
   sent = stored(`sent:${branch}`, [])
   renderStack()
@@ -623,6 +625,68 @@ function renderDescription() {
   const toggle = section.querySelector('.description-toggle')
   toggle.hidden = !overflows
   toggle.textContent = descriptionOpen ? 'Show less' : 'Show all'
+  renderDescriptionThreads()
+}
+
+let describing = null
+
+function renderDescriptionThreads() {
+  const box = $('#description .description-threads')
+  if (!box) return
+  const quote = q => (q ? `<blockquote>${esc(q)}</blockquote>` : '')
+  let html = ''
+  comments.forEach((c, index) => {
+    if (c.kind !== 'description' || describing?.index === index) return
+    html += `<div class="comment"><div class="comment-head"><strong>You</strong><span class="badge">Pending</span><span>on the description</span><span class="spacer"></span>
+      <button class="btn invisible" data-describe-edit="${index}">Edit</button><button class="btn invisible" data-remove="${index}">Delete</button></div>
+      <div class="comment-body">${quote(c.quote)}${esc(c.text)}</div></div>`
+  })
+  if (prefs.showSent) {
+    sent.forEach((c, index) => {
+      if (c.kind !== 'description') return
+      html += `<div class="comment sent"><div class="comment-head"><strong>You</strong><span class="badge sent">Sent to Claude</span><span>${esc(timeAgo(c.sentAt))}</span><span class="spacer"></span>
+        <button class="btn invisible" data-dismiss="${index}">Dismiss</button></div>
+        <div class="comment-body">${quote(c.quote)}${esc(c.text)}</div></div>`
+    })
+  }
+  if (describing) {
+    html += `<div class="composer">${describing.quote ? `<blockquote>${esc(describing.quote)}</blockquote>` : ''}
+      <textarea placeholder="Feedback on the PR description for Claude…">${esc(describing.text ?? '')}</textarea>
+      <div class="actions"><span class="muted hint">⌘↵ to save · Esc to cancel</span>
+        <button class="btn" data-act="describe-cancel">Cancel</button>
+        <button class="btn primary" data-act="describe-save">${describing.index === undefined ? 'Add comment' : 'Update comment'}</button></div></div>`
+  }
+  box.innerHTML = html
+  box.hidden = !html
+}
+
+function openDescribe(quote, index) {
+  const existing = index === undefined ? undefined : comments[index]
+  describing = { quote: existing?.quote ?? quote, text: existing?.text ?? '', index }
+  renderDescriptionThreads()
+  const area = $('#description .composer textarea')
+  area?.focus()
+}
+
+function saveDescribe() {
+  if (!describing) return
+  const text = $('#description .composer textarea')?.value.trim() ?? ''
+  const { quote, index } = describing
+  describing = null
+  if (index !== undefined) comments.splice(index, 1)
+  if (text) {
+    comments.push({ kind: 'description', path: 'PR description', side: 'new', line: 0, id: Date.now(), quote, text, base: current?.parent })
+  }
+  persistComments()
+  renderHeader()
+  renderCommentViews()
+}
+
+function descriptionSelection() {
+  const selection = window.getSelection()
+  const body = $('#description .description-body')
+  if (!selection || selection.isCollapsed || !body.contains(selection.anchorNode)) return ''
+  return selection.toString().trim().slice(0, 1000)
 }
 
 const REVIEW_STATES = {
@@ -660,7 +724,11 @@ function prInfo(pr) {
         ? `<button class="btn" data-act="pr-ready" data-number="${pr.number}" data-ready="${pr.isDraft}">${pr.isDraft ? 'Ready for review' : 'Convert to draft'}</button>`
         : ''
     }
-    ${reviewers ? `<span class="reviewers"><span class="muted">Reviewers</span>${reviewers}</span>` : '<span class="muted">No reviewers</span>'}
+    <span class="reviewers"><span class="muted">${reviewers ? 'Reviewers' : 'No reviewers'}</span>${reviewers}${
+      pr.state === 'OPEN'
+        ? `<button class="btn icon invisible" data-act="reviewers" data-number="${pr.number}" title="Request reviewers">${ICONS.gear}</button>`
+        : ''
+    }</span>
     ${labels ? `<span class="labels">${labels}</span>` : ''}
   </div>`
 }
@@ -869,7 +937,11 @@ function commentItems(list, kind) {
     for (const comment of items) {
       jumps.push(comment)
       html += `<div class="comment-item${kind === 'sent' ? ' sent' : ''}" data-jump="${jumps.length - 1}">
-        <div class="where"><code>${esc(comment.path)}:${comment.start && comment.start !== comment.line ? `${comment.start}–${comment.line}` : comment.line}</code>
+        <div class="where"><code>${
+          comment.kind === 'description'
+            ? 'PR description'
+            : `${esc(comment.path)}:${comment.start && comment.start !== comment.line ? `${comment.start}–${comment.line}` : comment.line}`
+        }</code>
           ${kind === 'sent' ? `<span class="muted">${esc(timeAgo(comment.sentAt))}</span>` : ''}</div>
         <div class="text">${esc(comment.text)}</div></div>`
     }
@@ -898,7 +970,13 @@ function renderCommentViews() {
 
 function applyJump() {
   const target = pendingJump
-  if (!target || target.branch !== selected || !files.length) return
+  if (!target || target.branch !== selected) return
+  if (target.kind === 'description') {
+    pendingJump = null
+    $('#description').scrollIntoView({ block: 'start' })
+    return
+  }
+  if (!files.length) return
   pendingJump = null
   const file = files.find(f => f.path === target.path)
   if (!file) return
@@ -1091,12 +1169,153 @@ function scrollToFile(path) {
   if (card) window.scrollTo({ top: card.getBoundingClientRect().top + window.scrollY - $('#header').offsetHeight - 8 })
 }
 
+/* reviewer picker */
+
+let picker = null
+
+async function runAction(body) {
+  const { id } = await api('/action', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  return waitForDelivery(id)
+}
+
+function avatar(person) {
+  const url = typeof person.avatarUrl === 'string' && MEDIA_HOSTS.test(person.avatarUrl) ? person.avatarUrl : ''
+  return url ? `<img class="avatar" src="${esc(url)}" alt="">` : '<span class="avatar"></span>'
+}
+
+function renderPicker() {
+  const box = $('#picker')
+  if (!picker) {
+    box.hidden = true
+    return
+  }
+  const list = box.querySelector('.picker-list')
+  const foot = box.querySelector('.picker-foot')
+  if (picker.error) {
+    list.innerHTML = `<div class="empty-note">${esc(picker.error)}</div>`
+    return
+  }
+  if (!picker.data) {
+    list.innerHTML = '<div class="empty-note">Loading people from GitHub…</div>'
+    return
+  }
+  const query = picker.query.toLowerCase()
+  const matches = p => !query || p.login.toLowerCase().includes(query) || (p.name ?? '').toLowerCase().includes(query)
+  const reviewed = new Map(picker.data.reviewed.map(r => [r.login, r.state]))
+  const seen = new Set()
+  const take = people =>
+    people.filter(p => {
+      if (seen.has(p.login) || !matches(p)) return false
+      seen.add(p.login)
+      return true
+    })
+  const sections = [
+    ['Suggestions', take(picker.data.suggestions)],
+    ['Requested', take(picker.data.requested)],
+    ['Everyone else', take([...picker.data.users, ...picker.extra])],
+  ]
+  const row = p => {
+    const state = reviewed.get(p.login)
+    return `<div class="person${picker.selected.has(p.login) ? ' selected' : ''}" data-person="${esc(p.login)}">
+      <span class="check">${picker.selected.has(p.login) ? '✓' : ''}</span>${avatar(p)}
+      <span><strong>${esc(p.login)}</strong> <span class="muted">${esc(p.name ?? '')}</span>
+      ${state ? `<br><span class="muted small">${esc((REVIEW_STATES[state] ?? REVIEW_STATES.COMMENTED)[1])}: select to re-request</span>` : ''}</span></div>`
+  }
+  list.innerHTML =
+    sections
+      .filter(([, people]) => people.length)
+      .map(([title, people]) => `<div class="picker-section">${title}</div>${people.map(row).join('')}`)
+      .join('') || `<div class="empty-note">${picker.searching ? 'Searching…' : 'Nobody found.'}</div>`
+  const added = [...picker.selected].filter(l => !picker.initial.has(l)).length
+  const removed = [...picker.initial].filter(l => !picker.selected.has(l)).length
+  foot.textContent = added || removed ? `${added} to add, ${removed} to remove: applied when you close this` : 'Close to apply'
+}
+
+async function openPicker(button) {
+  const rect = button.getBoundingClientRect()
+  const box = $('#picker')
+  box.hidden = false
+  box.style.setProperty('--top', `${rect.bottom + 6}px`)
+  box.style.setProperty('--left', `${Math.max(8, Math.min(rect.left, window.innerWidth - 380))}px`)
+  picker = { number: Number(button.dataset.number), query: '', selected: new Set(), initial: new Set(), extra: [], data: null }
+  box.querySelector('input').value = ''
+  box.querySelector('input').focus()
+  renderPicker()
+  const result = await runAction({ type: 'reviewers-load', number: picker.number }).catch(() => null)
+  if (!picker) return
+  if (!result?.ok) {
+    picker.error = result?.message ?? 'Claude Code did not answer.'
+  } else {
+    picker.data = result.data
+    picker.initial = new Set(result.data.requested.map(p => p.login))
+    picker.selected = new Set(picker.initial)
+  }
+  renderPicker()
+}
+
+let searchTimer
+
+function searchPicker(query) {
+  picker.query = query
+  renderPicker()
+  clearTimeout(searchTimer)
+  if (!query || !picker.data) return
+  searchTimer = setTimeout(async () => {
+    picker.searching = true
+    renderPicker()
+    const result = await runAction({ type: 'reviewers-load', number: picker.number, query }).catch(() => null)
+    if (!picker) return
+    picker.searching = false
+    if (result?.ok) picker.extra = [...picker.extra, ...result.data.users]
+    renderPicker()
+  }, 350)
+}
+
+async function closePicker() {
+  if (!picker) return
+  const { number, selected, initial } = picker
+  picker = null
+  renderPicker()
+  const add = [...selected].filter(l => !initial.has(l))
+  const remove = [...initial].filter(l => !selected.has(l))
+  if (!add.length && !remove.length) return
+  $('#notice').textContent = 'Updating reviewers on GitHub…'
+  const result = await runAction({ type: 'reviewers-set', number, add, remove }).catch(() => null)
+  $('#notice').textContent = !result
+    ? 'Claude Code did not answer: reviewers were not changed.'
+    : result.ok
+      ? ''
+      : `GitHub refused the reviewer change: ${result.message ?? 'unknown error'}`
+}
+
 /* events */
 
 document.addEventListener('click', event => {
   const t = event.target
   if (t.closest('td.ln[data-line]')) return
-  const el = t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-jump]')
+  if (picker && !t.closest('#picker') && !t.closest('[data-act="reviewers"]')) closePicker()
+  const person = t.closest('#picker [data-person]')
+  if (person && picker?.data) {
+    const login = person.dataset.person
+    if (picker.selected.has(login)) picker.selected.delete(login)
+    else if (picker.selected.size < 15) picker.selected.add(login)
+    renderPicker()
+    return
+  }
+  const code = t.closest('#diff td.code:not(.empty)')
+  if (code && window.getSelection()?.isCollapsed !== false) {
+    let ln = code.previousElementSibling
+    if (!ln?.dataset.line) ln = ln?.previousElementSibling
+    if (ln?.dataset.line) {
+      const at = cellTarget(ln)
+      const extend = event.shiftKey && composer && composer.path === at.path && composer.side === at.side
+      const start = extend ? Math.min(composer.start, at.line) : at.line
+      const end = extend ? Math.max(composer.line, at.line) : at.line
+      openComposer({ ...at, start, line: end })
+      return
+    }
+  }
+  const el = t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-jump],[data-describe-edit]')
   if (!t.closest('#submit') && !t.closest('[data-act="review"]')) $('#submit').hidden = true
   if (!el) return
   const d = el.dataset
@@ -1145,12 +1364,14 @@ document.addEventListener('click', event => {
     if (comment) rerenderFile(comment.path)
     renderHeader()
     renderCommentViews()
+    renderDescriptionThreads()
   }
   if (d.dismiss) {
     const [comment] = sent.splice(Number(d.dismiss), 1)
     store(`sent:${selected}`, sent.length ? sent : undefined)
     if (comment) rerenderFile(comment.path)
     renderCommentViews()
+    renderDescriptionThreads()
   }
   if (d.jump) {
     const target = jumps[Number(d.jump)]
@@ -1168,6 +1389,17 @@ document.addEventListener('click', event => {
     renderAll()
   }
   if (d.act === 'pr-ready') setReady(el)
+  if (d.act === 'reviewers') {
+    if (picker) closePicker()
+    else openPicker(el)
+  }
+  if (d.act === 'describe') openDescribe(el.dataset.quote ?? descriptionSelection())
+  if (d.act === 'describe-save') saveDescribe()
+  if (d.act === 'describe-cancel') {
+    describing = null
+    renderDescriptionThreads()
+  }
+  if (d.describeEdit !== undefined) openDescribe('', Number(d.describeEdit))
   if (d.act === 'toggle-description') {
     descriptionOpen = !descriptionOpen
     renderDescription()
@@ -1205,6 +1437,8 @@ function paintDrag() {
 }
 
 document.addEventListener('mousedown', event => {
+  const describe = event.target.closest('[data-act="describe"]')
+  if (describe) describe.dataset.quote = descriptionSelection()
   const cell = event.button === 0 && event.target.closest('#diff td.ln[data-line]')
   if (!cell) return
   event.preventDefault()
@@ -1258,6 +1492,18 @@ document.addEventListener('change', event => {
 })
 
 document.addEventListener('keydown', event => {
+  if (event.target.closest('#picker input')) {
+    if (event.key === 'Escape') closePicker()
+    return
+  }
+  if (event.target.closest('#description .composer textarea')) {
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) saveDescribe()
+    if (event.key === 'Escape') {
+      describing = null
+      renderDescriptionThreads()
+    }
+    return
+  }
   if (event.target.closest('.composer textarea')) {
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) saveComposer()
     if (event.key === 'Escape') closeComposer()
@@ -1268,9 +1514,16 @@ document.addEventListener('keydown', event => {
     if (event.key === 'Escape') $('#submit').hidden = true
     return
   }
-  if (event.key === 'Escape') $('#submit').hidden = true
+  if (event.key === 'Escape') {
+    $('#submit').hidden = true
+    closePicker()
+  }
   if (event.key === '[') navigate(-1)
   if (event.key === ']') navigate(1)
+})
+
+document.addEventListener('input', event => {
+  if (event.target.closest('#picker input') && picker) searchPicker(event.target.value.trim())
 })
 
 window.addEventListener('resize', () => document.documentElement.style.setProperty('--header-height', `${$('#header').offsetHeight}px`))

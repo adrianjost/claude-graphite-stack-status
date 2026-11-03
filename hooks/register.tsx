@@ -595,6 +595,8 @@ async function pushReview($: Engine) {
 }
 
 type ReviewComment = {
+  kind?: 'description'
+  quote?: string
   branch?: string
   base?: string
   path: string
@@ -605,6 +607,62 @@ type ReviewComment = {
   code?: string
 }
 type PrReadyAction = { type: 'pr-ready'; number: number; ready: boolean }
+type ReviewersLoadAction = { type: 'reviewers-load'; number: number; query?: string }
+type ReviewersSetAction = { type: 'reviewers-set'; number: number; add: string[]; remove: string[] }
+type PageAction = ReviewAction | PrReadyAction | ReviewersLoadAction | ReviewersSetAction
+type ActionResult = { ok: boolean; message?: string; data?: unknown }
+
+const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/
+
+type Person = { login: string; name: string | null; avatarUrl: string }
+
+async function loadReviewers($: Engine, number: number, query = ''): Promise<ActionResult> {
+  const cwd = await $.session.cwd()
+  const repo = await githubRepo($, cwd)
+  if (!repo) return { ok: false, message: 'Not a GitHub repository' }
+  const result = await exec($, cwd, [
+    'gh', 'api', 'graphql',
+    '-f', `owner=${repo.owner}`, '-f', `name=${repo.name}`, '-F', `number=${number}`, '-f', `search=${query.slice(0, 100)}`,
+    '-f',
+    'query=query($owner:String!,$name:String!,$number:Int!,$search:String){repository(owner:$owner,name:$name){' +
+      'pullRequest(number:$number){author{login} suggestedReviewers{isAuthor reviewer{login name avatarUrl(size:40)}} ' +
+      'reviewRequests(first:50){nodes{requestedReviewer{... on User{login name avatarUrl(size:40)}}}} ' +
+      'latestReviews(first:50){nodes{state author{login ... on User{name avatarUrl(size:40)}}}}} ' +
+      'assignableUsers(first:100,query:$search){nodes{login name avatarUrl(size:40)}}}}',
+  ])
+  if (result.exitCode !== 0) return { ok: false, message: (result.stderr || result.stdout).trim().split('\n')[0] }
+  const repository = JSON.parse(result.stdout).data.repository
+  const pr = repository.pullRequest
+  const author: string | undefined = pr.author?.login
+  const strip = (people: (Person | null | undefined)[]) =>
+    people.filter((p): p is Person => !!p?.login && p.login !== author)
+  return {
+    ok: true,
+    data: {
+      author,
+      suggestions: strip(pr.suggestedReviewers.filter((s: { isAuthor: boolean }) => !s.isAuthor).map((s: { reviewer: Person }) => s.reviewer)),
+      requested: strip(pr.reviewRequests.nodes.map((n: { requestedReviewer: Person | null }) => n.requestedReviewer)),
+      reviewed: pr.latestReviews.nodes
+        .filter((n: { author: Person | null }) => n.author)
+        .map((n: { state: string; author: Person }) => ({ ...n.author, state: n.state })),
+      users: strip(repository.assignableUsers.nodes),
+    },
+  }
+}
+
+async function setReviewers($: Engine, action: ReviewersSetAction): Promise<ActionResult> {
+  const add = (action.add ?? []).filter(login => LOGIN.test(login)).slice(0, 15)
+  const remove = (action.remove ?? []).filter(login => LOGIN.test(login))
+  if (!add.length && !remove.length) return { ok: true }
+  const cwd = await $.session.cwd()
+  const result = await exec($, cwd, [
+    'gh', 'pr', 'edit', String(action.number),
+    ...(add.length ? ['--add-reviewer', add.join(',')] : []),
+    ...(remove.length ? ['--remove-reviewer', remove.join(',')] : []),
+  ])
+  requestRefresh($, 'force')
+  return result.exitCode === 0 ? { ok: true } : { ok: false, message: (result.stderr || result.stdout).trim().split('\n')[0] }
+}
 type ReviewAction = {
   type: 'review'
   branch: string
@@ -628,7 +686,10 @@ function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
     (c.side === 'old' ? ` (removed line${c.start && c.start !== c.line ? 's' : ''})` : '')
   const quote = (code?: string) =>
     code?.trim() ? `\n${code.replace(/\s+$/, '').split('\n').map(line => `   > ${line}`).join('\n')}` : ''
-  const comments = action.comments.filter(c => (c.branch ?? action.branch) === action.branch)
+  const mine = action.comments.filter(c => (c.branch ?? action.branch) === action.branch)
+  const comments = mine.filter(c => c.kind !== 'description')
+  const notes = mine.filter(c => c.kind === 'description')
+  const pr = stackOrder(rows).find(row => row.branch === action.branch)?.pr
   const base = action.compareTo ?? comments.find(c => c.base)?.base
   return [
     `Review feedback on ${layerLabel(rows, action.branch)}` +
@@ -636,8 +697,13 @@ function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
       (action.includesUncommitted ? ' including uncommitted changes' : '') +
       ':',
     action.summary ? `\n${action.summary}` : '',
-    comments.length ? `\n${comments.map((c, i) => `${i + 1}. ${where(c)}: ${c.text}${quote(c.code)}`).join('\n')}` : '',
-    `\nAddress each point on \`${action.branch}\`. Don't push anything.`,
+    notes.length
+      ? `\nOn the PR description${pr ? ` of #${pr.number}` : ''}:\n${notes.map((c, i) => `${i + 1}. ${c.text}${quote(c.quote)}`).join('\n')}`
+      : '',
+    comments.length ? `\n${notes.length ? 'On the code:\n' : ''}${comments.map((c, i) => `${i + 1}. ${where(c)}: ${c.text}${quote(c.code)}`).join('\n')}` : '',
+    `\nAddress each point on \`${action.branch}\`.` +
+      (notes.length && pr ? ` Apply the description points by editing PR #${pr.number}'s description on GitHub, changing only what the feedback asks for.` : '') +
+      ` Don't push any code.`,
   ]
     .filter(Boolean)
     .join('\n')
@@ -648,7 +714,7 @@ async function pollReviewActions($: Engine, port: number) {
   while (review?.port === port) {
     const base = `http://127.0.0.1:${port}`
     const token = review.token
-    let actions: ((ReviewAction | PrReadyAction) & { id: number })[] = []
+    let actions: (PageAction & { id: number })[] = []
     try {
       const response = await $.http.fetch(`${base}/actions?t=${token}`)
       actions = response.ok ? JSON.parse(response.text) : []
@@ -658,8 +724,14 @@ async function pollReviewActions($: Engine, port: number) {
       continue
     }
     const done: number[] = []
-    const results: Record<number, { ok: boolean; message?: string }> = {}
+    const results: Record<number, ActionResult> = {}
     for (const action of actions) {
+      if (!handled.has(action.id) && action.type === 'reviewers-load' && Number.isInteger(action.number)) {
+        results[action.id] = await loadReviewers($, action.number, action.query).catch(error => ({ ok: false, message: String(error) }))
+      }
+      if (!handled.has(action.id) && action.type === 'reviewers-set' && Number.isInteger(action.number)) {
+        results[action.id] = await setReviewers($, action).catch(error => ({ ok: false, message: String(error) }))
+      }
       if (!handled.has(action.id) && action.type === 'pr-ready' && Number.isInteger(action.number)) {
         const cwd = await $.session.cwd()
         const argv = ['gh', 'pr', 'ready', String(action.number), ...(action.ready ? [] : ['--undo'])]
