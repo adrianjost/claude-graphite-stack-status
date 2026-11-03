@@ -682,27 +682,46 @@ function layerLabel(rows: StackRow[], branch: string) {
   return at >= 0 && layers.length > 1 ? `${subject} (stack layer ${at + 1}/${layers.length})` : subject
 }
 
+function quoteLines(code?: string) {
+  const lines = (code ?? '').replace(/\s+$/, '').split('\n')
+  if (!lines.join('').trim()) return ''
+  const indent = Math.min(...lines.filter(line => line.trim()).map(line => line.match(/^\s*/)![0].length))
+  const shown = lines.map(line => line.slice(indent)).slice(0, 3)
+  if (lines.length > 3) shown.push('…')
+  return `\n${shown.map(line => `   > ${line}`).join('\n')}`
+}
+
 function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
   const where = (c: ReviewComment) =>
     `\`${c.path}:${c.start && c.start !== c.line ? `${c.start}-${c.line}` : c.line}\`` +
     (c.side === 'old' ? ` (removed line${c.start && c.start !== c.line ? 's' : ''})` : '')
-  const quote = (code?: string) =>
-    code?.trim() ? `\n${code.replace(/\s+$/, '').split('\n').map(line => `   > ${line}`).join('\n')}` : ''
   const mine = action.comments.filter(c => (c.branch ?? action.branch) === action.branch)
   const comments = mine.filter(c => c.kind !== 'description')
   const notes = mine.filter(c => c.kind === 'description')
   const pr = stackOrder(rows).find(row => row.branch === action.branch)?.pr
+  const subject = layerLabel(rows, action.branch)
+  const single = mine.length === 1 && !action.summary ? mine[0] : undefined
+  if (single) {
+    const target = single.kind === 'description' ? (pr ? 'the PR description' : 'the commit message') : where(single)
+    const apply =
+      single.kind === 'description'
+        ? pr
+          ? ' Apply it by editing the PR description on GitHub.'
+          : " Apply it to the branch's commit message."
+        : ''
+    return `Review comment on ${subject}, ${target}: ${single.text}${quoteLines(single.kind === 'description' ? single.quote : single.code)}\n\n${apply.trim() ? `${apply.trim()} ` : ''}Don't push any code.`
+  }
   const base = action.compareTo ?? comments.find(c => c.base)?.base
   return [
-    `Review feedback on ${layerLabel(rows, action.branch)}` +
+    `Review feedback on ${subject}` +
       (base ? ` vs \`${base}\`` : '') +
       (action.includesUncommitted ? ' including uncommitted changes' : '') +
       ':',
     action.summary ? `\n${action.summary}` : '',
     notes.length
-      ? `\nOn the ${pr ? 'PR description' : 'commit message (the future PR description)'}:\n${notes.map((c, i) => `${i + 1}. ${c.text}${quote(c.quote)}`).join('\n')}`
+      ? `\nOn the ${pr ? 'PR description' : 'commit message (the future PR description)'}:\n${notes.map((c, i) => `${i + 1}. ${c.text}${quoteLines(c.quote)}`).join('\n')}`
       : '',
-    comments.length ? `\n${notes.length ? 'On the code:\n' : ''}${comments.map((c, i) => `${i + 1}. ${where(c)}: ${c.text}${quote(c.code)}`).join('\n')}` : '',
+    comments.length ? `\n${notes.length ? 'On the code:\n' : ''}${comments.map((c, i) => `${i + 1}. ${where(c)}: ${c.text}${quoteLines(c.code)}`).join('\n')}` : '',
     `\nAddress each point on its branch.` +
       (notes.length && pr ? ' Apply the description points by editing the PR description on GitHub, changing only what they ask for.' : '') +
       (notes.length && !pr ? " Apply the description points to the branch's commit message, which becomes the PR title and description." : '') +
