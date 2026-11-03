@@ -398,6 +398,7 @@ function threadRows(path, targets, colspan) {
       html += row(
         `<div class="comment">
         <div class="comment-head"><strong>You</strong><span class="badge">Pending</span><span>on ${rangeLabel(comment)}</span><span class="spacer"></span>
+          <button class="btn invisible" data-send-now="${index}" title="Send just this comment to Claude now">Send now</button>
           <button class="btn invisible" data-edit="${index}">Edit</button>
           <button class="btn invisible" data-remove="${index}">Delete</button></div>
         <div class="comment-body">${esc(comment.text)}</div></div>`,
@@ -423,6 +424,7 @@ function threadRows(path, targets, colspan) {
         <textarea placeholder="Leave a comment for Claude on ${rangeLabel(composer)}…">${esc(composer.text ?? '')}</textarea>
         <div class="actions"><span class="muted hint">⌘↵ to save · Esc to cancel</span>
           <button class="btn" data-act="cancel">Cancel</button>
+          <button class="btn" data-act="send-now" title="Send just this comment to Claude now, without the rest of the review">Send to Claude now</button>
           <button class="btn primary" data-act="save">${composer.text ? 'Update comment' : 'Add comment'}</button></div>
         </div>`,
         target.side,
@@ -1110,6 +1112,61 @@ function saveComposer() {
   saveDraft()
 }
 
+async function deliver(list) {
+  const { id } = await api('/action', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      type: 'review',
+      branch: selected,
+      compareTo: current?.parent,
+      includesUncommitted: !!current?.includeWorktree,
+      summary: '',
+      comments: list.map(c => ({ ...c, branch: selected })),
+    }),
+  })
+  const result = await waitForDelivery(id, 30)
+  if (result) return result
+  const cancel = await api('/action-cancel', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id }),
+  }).catch(() => null)
+  return cancel?.delivered ? { ok: true } : null
+}
+
+async function sendNow(comment, button) {
+  button.disabled = true
+  button.textContent = 'Sending…'
+  const result = await deliver([comment]).catch(() => null)
+  if (!result) {
+    button.disabled = false
+    button.textContent = 'Retry sending'
+    showTip(button, "Claude Code isn't reachable: the comment is kept")
+    return false
+  }
+  sent = [...sent, { ...comment, sentAt: Date.now() }]
+  store(`sent:${selected}`, sent)
+  comments = comments.filter(c => !sameTarget(c, comment))
+  persistComments()
+  rerenderFile(comment.path)
+  renderHeader()
+  renderCommentViews()
+  showTip(document.querySelector('[data-act="review"]') ?? button, result.data?.queued ? 'Queued for Claude ✓' : 'Sent to Claude ✓')
+  return true
+}
+
+async function sendComposerNow(button) {
+  if (!composer) return
+  const text = document.querySelector('#diff .composer textarea')?.value.trim() ?? ''
+  if (!text) return
+  const target = { path: composer.path, side: composer.side, line: composer.line }
+  saveComposer()
+  const index = comments.findIndex(c => sameTarget(c, target))
+  if (index < 0) return
+  await sendNow(comments[index], document.querySelector(`[data-send-now="${index}"]`) ?? button)
+}
+
 function closeComposer() {
   if (!composer) return
   const path = composer.path
@@ -1449,7 +1506,7 @@ document.addEventListener('click', event => {
   const head = t.closest('.file-head')
   const headToggle =
     head && !t.closest('button, label, input, a') && window.getSelection()?.isCollapsed !== false ? head.querySelector('[data-collapse]') : null
-  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-jump],[data-describe-edit]')
+  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-jump],[data-describe-edit],[data-send-now]')
   if (!t.closest('#submit') && !t.closest('[data-act="review"]')) $('#submit').hidden = true
   if (!el) return
   const d = el.dataset
@@ -1541,6 +1598,11 @@ document.addEventListener('click', event => {
   if (d.act === 'toggle-description') {
     descriptionOpen = !descriptionOpen
     renderDescription()
+  }
+  if (d.act === 'send-now') sendComposerNow(el)
+  if (d.sendNow !== undefined) {
+    const comment = comments[Number(d.sendNow)]
+    if (comment) sendNow(comment, el)
   }
   if (d.act === 'save') saveComposer()
   if (d.act === 'cancel') closeComposer()
