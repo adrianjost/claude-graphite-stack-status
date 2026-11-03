@@ -477,27 +477,30 @@ function portFor(id: string) {
   return REVIEW_PORT_BASE + (Math.abs(h) % REVIEW_PORTS)
 }
 
-async function reviewToken($: Engine) {
+async function storedReviewToken($: Engine) {
   const stored = await $.store.get('reviewToken')
-  if (typeof stored === 'string' && stored.length >= 32) return stored
-  const token = Array.from({ length: 40 }, () => Math.floor(Math.random() * 16).toString(16)).join('')
-  await $.store.set('reviewToken', token)
-  return token
+  return typeof stored === 'string' && /^[0-9a-f]{64}$/.test(stored) ? stored : ''
 }
 
 function startReview($: Engine) {
   if (review) return Promise.resolve()
   reviewStarting ??= (async () => {
-    const [cwd, id, token] = await Promise.all([$.session.cwd(), $.session.id(), reviewToken($)])
+    const [cwd, id, stored] = await Promise.all([$.session.cwd(), $.session.id(), storedReviewToken($)])
     let port = 0
+    let token = stored
     let failure: string | undefined
     const ended = (async () => {
       try {
-        const child = $.process.spawn({ argv: ['node', `${$.plugin.root}/review/server.mjs`, cwd, token, String(portFor(id))] })
+        const child = $.process.spawn({ argv: ['node', `${$.plugin.root}/review/server.mjs`, cwd, stored, String(portFor(id))] })
         for await (const { stream, text } of child) {
+          if (stream === 'stderr') {
+            failure = text.trim()
+            continue
+          }
+          const issued = /TOKEN ([0-9a-f]{64})/.exec(text)?.[1]
+          if (issued) token = issued
           const found = /PORT (\d+)/.exec(text)
           if (found) port = Number(found[1])
-          else if (stream === 'stderr') failure = text.trim()
         }
       } catch (error) {
         failure = String(error)
@@ -514,6 +517,7 @@ function startReview($: Engine) {
       $.ui.log(`review page didn't start: ${failure ?? 'no answer from node'}`, { to: 'debug' })
       return
     }
+    if (token !== stored) await $.store.set('reviewToken', token)
     review = { port, token }
     await update($, reviewUrl, () => `http://127.0.0.1:${port}/?t=${token}`)
     await pushReview($)
@@ -631,10 +635,15 @@ async function openReview($: Engine, branch?: string) {
   }
   const target = branch ? `${url}#branch=${encodeURIComponent(branch)}` : url
   const cwd = await $.session.cwd()
-  for (const argv of [['open', target], ['xdg-open', target], ['cmd', '/c', 'start', '', target]]) {
-    const opened = await $.process.run(argv, { cwd }).catch(() => undefined)
-    if (opened?.exitCode === 0) return
-  }
+  const system = (await $.process.run(['uname', '-s'], { cwd }).catch(() => undefined))?.stdout.trim()
+  const argv =
+    system === 'Darwin'
+      ? ['open', target]
+      : system
+        ? ['xdg-open', target]
+        : ['rundll32', 'url.dll,FileProtocolHandler', target]
+  const opened = await $.process.run(argv, { cwd }).catch(() => undefined)
+  if (opened?.exitCode === 0) return
   $.ui.toast(`Open ${target} in your browser`, { timeoutMs: 15000 })
 }
 

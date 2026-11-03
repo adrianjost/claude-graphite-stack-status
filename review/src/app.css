@@ -862,3 +862,19 @@ td.ln.pending::after {
 [hidden] {
   display: none !important;
 }
+
+.pr-links {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+.pr-links a {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.pr-links a:hover {
+  color: var(--text);
+}

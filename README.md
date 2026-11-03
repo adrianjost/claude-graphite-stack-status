@@ -36,7 +36,7 @@ Answer `y` to add the marketplace, then pick a scope.
 - [`gt`](https://graphite.dev/docs/install-the-cli) tracking your branches (the plugin reads Graphite's local metadata, `.git/.graphite_metadata.db`)
 - [`gh`](https://cli.github.com), signed in to the repository's GitHub host
 - `sqlite3` and `git` on your `PATH`
-- [Node.js](https://nodejs.org) on your `PATH` for the review page (optional)
+- [Node.js](https://nodejs.org) on your `PATH` for the review page (optional; nothing to install, the page ships prebuilt)
 
 ## Usage
 
@@ -56,7 +56,7 @@ The band appears on its own whenever the session's branch belongs to a Graphite 
 - Click a line number to leave an inline comment, then **Review** → **Send to Claude** hands all comments and an overall note to Claude in the session.
 - The page updates live after commits, restacks and Claude's file edits.
 
-Each session serves its own page on `127.0.0.1` with a fixed port, so several review pages can be open at once and an open tab reconnects after a restart. Requests need a random token in the page's URL, and other sites can't call it.
+Each session serves its own page on `127.0.0.1` with a fixed port, so several review pages can be open at once and an open tab reconnects after a restart. Requests need a random token in the page's URL, and other sites can't call it; see [SECURITY.md](SECURITY.md).
 
 ## Keeping the stack current
 
@@ -69,6 +69,17 @@ Pick where clicking a PR title opens it with the **Links** picker in the band's 
 ## Troubleshooting
 
 When something keeps the band from working, it shows a ⚠ line with the reason, for example a missing `gh` or `sqlite3`, a `gt` version too old to read, `gh` not signed in, or GitHub's rate limit. Click its button to have Claude fix the problem, or to look into it and suggest a fix when the cause isn't clear.
+
+## Development
+
+The review page's sources live in `review/src`. Its dependencies (highlight.js, jsdiff) are pinned in `package.json` and bundled into `review/dist` by esbuild, so the page loads nothing from the internet. `review/dist` is committed because plugins install straight from the repository:
+
+```bash
+npm ci
+npm run build
+```
+
+CI checks that the committed bundle matches a fresh build and runs `npm audit`; Dependabot proposes dependency updates weekly.
 
 ## License
 

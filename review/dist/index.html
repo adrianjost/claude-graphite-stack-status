@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stack review</title>
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <aside id="sidebar">
+      <section>
+        <div class="side-head">
+          <span>Stack</span>
+          <span id="connection" class="connection" title="Live"></span>
+        </div>
+        <div id="stack"></div>
+      </section>
+      <section id="files-section" hidden>
+        <div class="side-head"><span>Files</span><span id="files-progress" class="muted"></span></div>
+        <div id="files"></div>
+      </section>
+      <section id="commits-section" hidden>
+        <div class="side-head"><span>Commits</span></div>
+        <div id="commits"></div>
+      </section>
+    </aside>
+    <main>
+      <header id="header"></header>
+      <div id="notice"></div>
+      <div id="diff"></div>
+    </main>
+    <div id="submit" hidden>
+      <strong>Finish your review</strong>
+      <textarea id="summary" placeholder="Leave an overall comment for Claude (optional)"></textarea>
+      <div class="actions">
+        <button class="btn" data-act="discard">Discard comments</button>
+        <button class="btn primary" data-act="send">Send to Claude</button>
+      </div>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>

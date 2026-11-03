@@ -1,0 +1,13 @@
+{
+  "name": "claude-graphite-stack-status",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  },
+  "devDependencies": {
+    "diff": "9.0.0",
+    "esbuild": "0.28.2",
+    "highlight.js": "11.12.0"
+  }
+}
