@@ -1665,3 +1665,9 @@ td.code:not(.empty) {
   display: block;
   image-rendering: pixelated;
 }
+
+.btn.small {
+  height: 24px;
+  padding: 0 10px;
+  font-size: 12px;
+}

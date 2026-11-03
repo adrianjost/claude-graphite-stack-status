@@ -10,7 +10,7 @@ const [, , cwd, givenToken, preferredPort] = process.argv
 const token = /^[0-9a-f]{64}$/.test(givenToken ?? '') ? givenToken : randomBytes(32).toString('hex')
 const tokenBytes = Buffer.from(token)
 const root = dirname(fileURLToPath(import.meta.url))
-const STATIC = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/app.css': ['app.css', 'text/css'], '/better-github.svg': ['better-github.svg', 'image/svg+xml'] }
+const STATIC = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/app.css': ['app.css', 'text/css'], '/badge.svg': ['badge.svg', 'image/svg+xml'] }
 const MAX_BUFFER = 64 * 1024 * 1024
 const UNTRACKED_MAX = 200
 
