@@ -582,6 +582,25 @@ function renderSidebar() {
     .join('')
 }
 
+const shortBranch = branch => (branch ?? '').replace(/^[^/]+\//, '')
+
+function updateIdentity() {
+  const root = stackRows().at(-1)?.branch ?? selected
+  const name = shortBranch(root) || 'stack'
+  const hue = Number.parseInt(hash(root || 'stack'), 36) % 360
+  const letter = esc((name.match(/[a-z0-9]/i)?.[0] ?? 'S').toUpperCase())
+  const icon =
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="hsl(${hue} 62% 44%)"/>` +
+    `<text x="16" y="22.5" font-size="19" font-weight="700" font-family="system-ui,-apple-system,sans-serif" fill="#fff" text-anchor="middle">${letter}</text></svg>`
+  const link = $('#favicon')
+  const href = `data:image/svg+xml,${encodeURIComponent(icon)}`
+  if (link.getAttribute('href') !== href) link.setAttribute('href', href)
+  const row = selectedRow()
+  const label = row?.pr ? `#${row.pr.number} ${row.pr.title}` : shortBranch(selected) || 'Review'
+  const pendingCountNow = pendingCount()
+  document.title = `${pendingCountNow ? `(${pendingCountNow}) ` : ''}${label} · ${name}`
+}
+
 function renderHeader() {
   const row = selectedRow()
   if (!row) {
@@ -643,6 +662,7 @@ function renderHeader() {
       <button class="btn primary" data-act="review">Review${pendingCount() ? ` <span class="count">${pendingCount()}</span>` : ''}</button>
     </div>`
   document.documentElement.style.setProperty('--header-height', `${$('#header').offsetHeight}px`)
+  updateIdentity()
 }
 
 function renderDiff() {
@@ -1132,7 +1152,6 @@ async function poll() {
       if (next.version === state.version) continue
       const restarted = next.version < state.version
       state = { ...next, rows: next.rows ?? [] }
-      document.title = `Review · ${state.repo ?? 'stack'}`
       if (state.focus && state.focus.seq !== lastFocus) {
         if (lastFocus !== null || !selected) select(state.focus.branch)
         lastFocus = state.focus.seq

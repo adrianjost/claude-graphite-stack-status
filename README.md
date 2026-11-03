@@ -56,6 +56,7 @@ The band appears on its own whenever the session's branch belongs to a Graphite 
 - Drag over line numbers (or click one and shift-click another) to leave an inline comment on one or more lines. **Review** lists every pending comment across the stack; **Send to Claude** hands them, grouped by branch, plus an overall note to Claude in the session and confirms once Claude Code picked them up.
 - Sent comments stay as a history: **Comments** lists pending and sent comments for the whole stack and jumps to each one. On the diff, sent comments show as faded cards, marked *Outdated* once their lines changed; dismiss them one by one, clear the history, or hide them from the diff.
 - The page updates live after commits, restacks and Claude's file edits.
+- The browser tab starts with what you're looking at (pending comment count, PR number and title, or branch) and ends with the stack's name. Each stack gets its own coloured favicon with its initial, so several review tabs stay easy to tell apart.
 
 Each session serves its own page on `127.0.0.1` with a fixed port, so several review pages can be open at once and an open tab reconnects after a restart. Requests need a random token in the page's URL, and other sites can't call it; see [SECURITY.md](SECURITY.md).
 
