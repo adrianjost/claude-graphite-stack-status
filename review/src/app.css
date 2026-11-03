@@ -617,8 +617,16 @@ td.ln.del {
   color: var(--text);
 }
 
-td.empty {
-  background: repeating-linear-gradient(-45deg, transparent 0 5px, var(--hatch) 5px 6px);
+table.diff {
+  background: repeating-linear-gradient(-45deg, transparent 0 5px, var(--hatch) 5px 6px), var(--bg);
+}
+
+:where(table.diff) td {
+  background-color: var(--bg);
+}
+
+table.diff td.empty {
+  background: transparent;
 }
 
 table.diff.split td.code.old {

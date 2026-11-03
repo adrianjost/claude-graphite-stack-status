@@ -676,8 +676,8 @@ function layerLabel(rows: StackRow[], branch: string) {
   const layers = stackOrder(rows)
   const at = layers.findIndex(row => row.branch === branch)
   const pr = layers[at]?.pr
-  const layer = at >= 0 ? `stack layer ${at + 1} of ${layers.length}, ` : ''
-  return `${layer}\`${branch}\`${pr ? `, PR #${pr.number} "${pr.title}" (${pr.url})` : ' (no PR yet)'}`
+  const subject = pr ? `PR #${pr.number}` : `\`${branch}\``
+  return at >= 0 && layers.length > 1 ? `${subject} (stack layer ${at + 1}/${layers.length})` : subject
 }
 
 function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
@@ -693,17 +693,17 @@ function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
   const base = action.compareTo ?? comments.find(c => c.base)?.base
   return [
     `Review feedback on ${layerLabel(rows, action.branch)}` +
-      (base ? `, its changes against \`${base}\`` : '') +
+      (base ? ` vs \`${base}\`` : '') +
       (action.includesUncommitted ? ' including uncommitted changes' : '') +
       ':',
     action.summary ? `\n${action.summary}` : '',
     notes.length
-      ? `\nOn the PR description${pr ? ` of #${pr.number}` : ''}:\n${notes.map((c, i) => `${i + 1}. ${c.text}${quote(c.quote)}`).join('\n')}`
+      ? `\nOn the PR description:\n${notes.map((c, i) => `${i + 1}. ${c.text}${quote(c.quote)}`).join('\n')}`
       : '',
     comments.length ? `\n${notes.length ? 'On the code:\n' : ''}${comments.map((c, i) => `${i + 1}. ${where(c)}: ${c.text}${quote(c.code)}`).join('\n')}` : '',
-    `\nAddress each point on \`${action.branch}\`.` +
-      (notes.length && pr ? ` Apply the description points by editing PR #${pr.number}'s description on GitHub, changing only what the feedback asks for.` : '') +
-      ` Don't push any code.`,
+    `\nAddress each point on its branch.` +
+      (notes.length && pr ? ' Apply the description points by editing the PR description on GitHub, changing only what they ask for.' : '') +
+      " Don't push any code.",
   ]
     .filter(Boolean)
     .join('\n')
