@@ -27,8 +27,8 @@ In order to be iterable, non-array objects must have a [Symbol.iterator]() metho
       <span class="path" title="${C(e.path)}">${i}</span>
       <button class="btn icon invisible" data-copy="${C(e.path)}" title="Copy path">${Qe.copy}</button>
       ${a?`<span class="badge">${a}</span>`:""}
-      <span class="stat"><span class="add">+${e.added}</span> <span class="del">\u2212${e.removed}</span>${su(e)}</span>
       <span class="spacer"></span>
+      <span class="stat"><span class="add">+${e.added}</span> <span class="del">\u2212${e.removed}</span>${su(e)}</span>
       ${qn.has(e.path)?'<span class="badge pending" title="Has uncommitted changes">Uncommitted</span>':""}
       ${r?`<span class="badge pending">${r} comment${r===1?"":"s"}</span>`:""}
       <label class="viewed-toggle"><input type="checkbox" data-viewed="${C(e.path)}" ${t?"checked":""}>Viewed</label>

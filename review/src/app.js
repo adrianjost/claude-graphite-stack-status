@@ -537,8 +537,8 @@ function fileCard(file) {
       <span class="path" title="${esc(file.path)}">${name}</span>
       <button class="btn icon invisible" data-copy="${esc(file.path)}" title="Copy path">${ICONS.copy}</button>
       ${status ? `<span class="badge">${status}</span>` : ''}
-      <span class="stat"><span class="add">+${file.added}</span> <span class="del">−${file.removed}</span>${bars(file)}</span>
       <span class="spacer"></span>
+      <span class="stat"><span class="add">+${file.added}</span> <span class="del">−${file.removed}</span>${bars(file)}</span>
       ${pending.has(file.path) ? '<span class="badge pending" title="Has uncommitted changes">Uncommitted</span>' : ''}
       ${count ? `<span class="badge pending">${count} comment${count === 1 ? '' : 's'}</span>` : ''}
       <label class="viewed-toggle"><input type="checkbox" data-viewed="${esc(file.path)}" ${viewed ? 'checked' : ''}>Viewed</label>

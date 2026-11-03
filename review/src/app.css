@@ -831,12 +831,31 @@ tr.thread td {
   font-size: 12px;
 }
 
-.file.half {
-  width: calc(50% + 0.5px);
+.file.half .file-body {
+  display: flex;
+  background: repeating-linear-gradient(-45deg, transparent 0 5px, var(--hatch) 5px 6px);
 }
 
-.file.half.new-side {
-  margin-left: auto;
+.file.half.new-side .file-body {
+  justify-content: flex-end;
+}
+
+.file.half .file-body > table {
+  width: 50%;
+  background: var(--bg);
+}
+
+.file.half.new-side .file-body > table {
+  border-left: 1px solid var(--border-muted);
+}
+
+.file.half.old-side .file-body > table {
+  border-right: 1px solid var(--border-muted);
+}
+
+.file.half .file-body > .placeholder {
+  flex: 1;
+  background: var(--bg);
 }
 
 td.ln.pending::after {
