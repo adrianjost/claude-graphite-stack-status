@@ -709,7 +709,7 @@ function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
           ? ' Apply it by editing the PR description on GitHub.'
           : " Apply it to the branch's commit message."
         : ''
-    return `Review comment on ${subject}, ${target}: ${single.text}${quoteLines(single.kind === 'description' ? single.quote : single.code)}\n\n${apply.trim() ? `${apply.trim()} ` : ''}Don't push any code.`
+    return `Review comment on ${subject}, ${target}: ${single.text}${quoteLines(single.kind === 'description' ? single.quote : single.code)}${apply ? `\n\n${apply.trim()}` : ''}`
   }
   const base = action.compareTo ?? comments.find(c => c.base)?.base
   return [
@@ -724,8 +724,7 @@ function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
     comments.length ? `\n${notes.length ? 'On the code:\n' : ''}${comments.map((c, i) => `${i + 1}. ${where(c)}: ${c.text}${quoteLines(c.code)}`).join('\n')}` : '',
     `\nAddress each point on its branch.` +
       (notes.length && pr ? ' Apply the description points by editing the PR description on GitHub, changing only what they ask for.' : '') +
-      (notes.length && !pr ? " Apply the description points to the branch's commit message, which becomes the PR title and description." : '') +
-      " Don't push any code.",
+      (notes.length && !pr ? " Apply the description points to the branch's commit message, which becomes the PR title and description." : ''),
   ]
     .filter(Boolean)
     .join('\n')
