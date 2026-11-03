@@ -759,6 +759,9 @@ function updateIdentity() {
   document.title = `${pendingCountNow ? `(${pendingCountNow}) ` : ''}${label} · ${name}`
 }
 
+const branchChip = name =>
+  `<span class="chip">${esc(name)}<button class="chip-copy" data-copy="${esc(name)}" title="Copy branch name">${ICONS.copy}</button></span>`
+
 function renderHeader() {
   const row = selectedRow()
   if (!row) {
@@ -786,8 +789,8 @@ function renderHeader() {
     <div class="meta">
       ${
         current?.mode === 'uncommitted'
-          ? `<span class="chip">working copy</span><span>→</span><span class="chip">${esc(row.branch)}</span>`
-          : `<span class="chip">${esc(row.branch)}</span><span>→</span><span class="chip">${esc(base)}</span>`
+          ? `${branchChip(row.branch)}<span title="receives">←</span><span class="chip">working copy</span>`
+          : `${branchChip(base)}<span title="receives">←</span>${branchChip(row.branch)}`
       }
       <span>${files.length} file${files.length === 1 ? '' : 's'}</span>
       <span class="stat"><span class="add">+${totals.added}</span> <span class="del">−${totals.removed}</span></span>
@@ -1314,7 +1317,10 @@ document.addEventListener('click', event => {
       return
     }
   }
-  const el = t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-jump],[data-describe-edit]')
+  const head = t.closest('.file-head')
+  const headToggle =
+    head && !t.closest('button, label, input, a') && window.getSelection()?.isCollapsed !== false ? head.querySelector('[data-collapse]') : null
+  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-jump],[data-describe-edit]')
   if (!t.closest('#submit') && !t.closest('[data-act="review"]')) $('#submit').hidden = true
   if (!el) return
   const d = el.dataset
@@ -1342,7 +1348,9 @@ document.addEventListener('click', event => {
   }
   if (d.copy) {
     navigator.clipboard?.writeText(d.copy)
+    el.classList.add('copied')
     el.title = 'Copied'
+    setTimeout(() => el.classList.remove('copied'), 1200)
   }
   if (d.goto) {
     const file = files.find(f => f.path === d.goto)
