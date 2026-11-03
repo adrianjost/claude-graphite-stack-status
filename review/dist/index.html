@@ -36,7 +36,17 @@
         <button class="btn" data-act="discard">Discard comments</button>
         <button class="btn primary" data-act="send">Send to Claude</button>
       </div>
+      <div id="submit-list"></div>
     </div>
+    <aside id="comments-panel" hidden>
+      <div class="panel-head">
+        <strong>Comments</strong>
+        <span class="spacer"></span>
+        <label class="switch"><input type="checkbox" data-toggle="show-sent">Show sent on the diff</label>
+        <button class="btn icon invisible" data-act="close-comments" title="Close">✕</button>
+      </div>
+      <div id="comments-list"></div>
+    </aside>
     <script src="app.js"></script>
   </body>
 </html>

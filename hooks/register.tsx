@@ -576,7 +576,16 @@ async function pushReview($: Engine) {
   }
 }
 
-type ReviewComment = { path: string; line: number; side: 'old' | 'new'; text: string; code?: string }
+type ReviewComment = {
+  branch?: string
+  base?: string
+  path: string
+  start?: number
+  line: number
+  side: 'old' | 'new'
+  text: string
+  code?: string
+}
 type ReviewAction = {
   type: 'review'
   branch: string
@@ -587,35 +596,62 @@ type ReviewAction = {
 }
 
 function reviewPrompt(action: ReviewAction) {
-  const where = (c: ReviewComment) => `\`${c.path}:${c.line}\`${c.side === 'old' ? ' (removed line)' : ''}`
-  const items = action.comments.map(
-    (c, i) => `${i + 1}. ${where(c)}: ${c.text}${c.code?.trim() ? `\n   > ${c.code.trim()}` : ''}`,
-  )
+  const where = (c: ReviewComment) =>
+    `\`${c.path}:${c.start && c.start !== c.line ? `${c.start}-${c.line}` : c.line}\`` +
+    (c.side === 'old' ? ` (removed line${c.start && c.start !== c.line ? 's' : ''})` : '')
+  const quote = (code?: string) =>
+    code?.trim() ? `\n${code.replace(/\s+$/, '').split('\n').map(line => `   > ${line}`).join('\n')}` : ''
+  const groups = new Map<string, ReviewComment[]>()
+  for (const c of action.comments) {
+    const branch = c.branch ?? action.branch
+    groups.set(branch, [...(groups.get(branch) ?? []), c])
+  }
+  const sections = [...groups].map(([branch, comments]) => {
+    const base = comments.find(c => c.base)?.base ?? (branch === action.branch ? action.compareTo : undefined)
+    const items = comments.map((c, i) => `${i + 1}. ${where(c)}: ${c.text}${quote(c.code)}`)
+    return `On \`${branch}\`${base ? ` (changes against \`${base}\`)` : ''}:\n${items.join('\n')}`
+  })
   return [
-    `Review feedback on the branch \`${action.branch}\`` +
-      (action.compareTo ? ` (its changes against \`${action.compareTo}\`` : '') +
-      (action.includesUncommitted ? ', including uncommitted changes)' : action.compareTo ? ')' : '') +
-      ':',
+    `Review feedback on my Graphite stack${action.includesUncommitted ? ' (it includes uncommitted changes)' : ''}:`,
     action.summary ? `\n${action.summary}` : '',
-    items.length ? `\n${items.join('\n')}` : '',
-    "\nAddress each point on that branch. Don't push anything.",
+    sections.length ? `\n${sections.join('\n\n')}` : '',
+    "\nAddress each point on the branch it belongs to. Don't push anything.",
   ]
     .filter(Boolean)
     .join('\n')
 }
 
 async function pollReviewActions($: Engine, port: number) {
+  const handled = new Set<number>()
   while (review?.port === port) {
+    const base = `http://127.0.0.1:${port}`
+    const token = review.token
+    let actions: (ReviewAction & { id: number })[] = []
     try {
-      const response = await $.http.fetch(`http://127.0.0.1:${port}/actions?t=${review.token}`)
-      const actions = response.ok ? (JSON.parse(response.text) as ReviewAction[]) : []
-      for (const action of actions) {
-        if (action.type === 'review' && (action.comments.length || action.summary)) {
+      const response = await $.http.fetch(`${base}/actions?t=${token}`)
+      actions = response.ok ? JSON.parse(response.text) : []
+    } catch (error) {
+      $.ui.log(`review actions poll failed: ${String(error)}`, { to: 'debug' })
+      await $.clock.sleep(2_000)
+      continue
+    }
+    const done: number[] = []
+    for (const action of actions) {
+      if (!handled.has(action.id) && action.type === 'review' && (action.comments.length || action.summary)) {
+        try {
           await $.prompt.submit({ text: reviewPrompt(action), asUser: true })
+        } catch (error) {
+          $.ui.toast(`Couldn't hand the review to Claude: ${String(error)}`, { timeoutMs: 10_000 })
+          continue
         }
       }
-    } catch {
-      await $.clock.sleep(2_000)
+      handled.add(action.id)
+      done.push(action.id)
+    }
+    if (done.length) {
+      await $.http
+        .fetch(`${base}/actions?t=${token}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids: done }) })
+        .catch(() => undefined)
     }
   }
 }

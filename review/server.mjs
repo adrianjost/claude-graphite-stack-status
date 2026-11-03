@@ -18,6 +18,8 @@ let state = { version: 0 }
 let stateWaiters = []
 let actions = []
 let actionWaiters = []
+let nextActionId = 1
+const delivered = new Set()
 let lastSeen = 0
 
 function hasToken(value) {
@@ -173,16 +175,25 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/file') return send(res, 200, await fileFor(url.searchParams))
     if (url.pathname === '/action' && req.method === 'POST') {
       if (actions.length >= 20) return send(res, 429, { error: 'busy' })
-      actions.push(await readBody(req, 256 * 1024))
+      const id = nextActionId++
+      actions.push({ ...(await readBody(req, 256 * 1024)), id })
       for (const wake of actionWaiters) wake()
       actionWaiters = []
+      return send(res, 200, { ok: true, id })
+    }
+    if (url.pathname === '/action') {
+      const id = Number(url.searchParams.get('id'))
+      return send(res, 200, { delivered: delivered.has(id), pending: actions.some(a => a.id === id) })
+    }
+    if (url.pathname === '/actions' && req.method === 'POST') {
+      const { ids = [] } = await readBody(req, 64 * 1024)
+      for (const id of ids) delivered.add(id)
+      actions = actions.filter(a => !ids.includes(a.id))
       return send(res, 200, { ok: true })
     }
     if (url.pathname === '/actions') {
-      if (!actions.length) await waitFor(actionWaiters, 25_000)
-      const taken = actions
-      actions = []
-      return send(res, 200, taken)
+      if (!actions.length) await waitFor(actionWaiters, 10_000)
+      return send(res, 200, actions)
     }
     send(res, 404, { error: 'not found' })
   } catch (error) {

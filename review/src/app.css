@@ -878,3 +878,180 @@ td.ln.pending::after {
 .pr-links a:hover {
   color: var(--text);
 }
+
+td.ln.in-range {
+  background: color-mix(in srgb, var(--accent) 22%, transparent) !important;
+  color: var(--text);
+}
+
+table.unified tr:has(> td.ln.in-range) > td.code,
+table.split tr:has(> td.ln.in-range:nth-child(1)) > td:nth-child(2),
+table.split tr:has(> td.ln.in-range:nth-child(3)) > td:nth-child(4),
+table:not(.split):not(.unified) tr:has(> td.ln.in-range) > td.code {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg)) !important;
+}
+
+body.selecting,
+body.selecting * {
+  cursor: ns-resize !important;
+  user-select: none;
+}
+
+tr.thread td.thread-gap {
+  background: var(--bg);
+  border-top: 0;
+  border-bottom: 0;
+}
+
+tr.thread td:not(.thread-gap) {
+  padding-left: 12px !important;
+}
+
+table.unified tr.thread td,
+table:not(.split) tr.thread td {
+  padding-left: 64px !important;
+}
+
+#submit-list,
+#comments-list {
+  max-height: 50vh;
+  overflow: auto;
+  border-top: 1px solid var(--border-muted);
+}
+
+#comments-list {
+  max-height: none;
+  flex: 1;
+  border-top: 0;
+}
+
+.list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.group-head {
+  padding: 8px 12px 2px;
+  font: 11px var(--mono);
+  color: var(--accent);
+}
+
+.comment-item {
+  margin: 4px 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.comment-item:hover {
+  background: var(--selected);
+}
+
+.comment-item .where {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.comment-item code {
+  font: 11px var(--mono);
+  color: var(--muted);
+}
+
+.comment-item .text {
+  margin-top: 2px;
+  white-space: pre-wrap;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.comment-item.sent .text {
+  color: var(--muted);
+}
+
+.empty-note {
+  padding: 4px 12px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#comments-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  width: min(420px, 100vw);
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+
+#comments-panel[hidden] {
+  display: none;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border-muted);
+}
+
+.comment.sent {
+  opacity: 0.75;
+}
+
+.badge.sent {
+  color: var(--add);
+  border-color: color-mix(in srgb, var(--add) 40%, transparent);
+}
+
+tr.flash > td {
+  animation: flash 1.6s ease-out;
+}
+
+@keyframes flash {
+  0% {
+    box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--warn) 35%, transparent);
+  }
+  100% {
+    box-shadow: none;
+  }
+}
+
+.comment-head {
+  flex-wrap: wrap;
+}
+
+.comment-head > * {
+  white-space: nowrap;
+}
+
+main {
+  overflow-x: clip;
+}
+
+.file-head {
+  overflow: hidden;
+}
+
+.file-head > * {
+  flex-shrink: 0;
+}
+
+.file-head > .path {
+  flex-shrink: 1;
+}

@@ -53,7 +53,8 @@ The band appears on its own whenever the session's branch belongs to a Graphite 
 - Diffs are GitHub-style: unified or split, with syntax highlighting, highlighted changed words and expandable context. Compare against the parent branch or trunk and hide whitespace.
 - On the checked-out branch, switch between all changes, committed only and uncommitted only. In the combined view, uncommitted lines get an orange dot and their files an **Uncommitted** badge.
 - Generated and very large files are left out until you show them. Mark files as viewed; the mark resets when the file changes.
-- Click a line number to leave an inline comment, then **Review** → **Send to Claude** hands all comments and an overall note to Claude in the session.
+- Drag over line numbers (or click one and shift-click another) to leave an inline comment on one or more lines. **Review** lists every pending comment across the stack; **Send to Claude** hands them, grouped by branch, plus an overall note to Claude in the session and confirms once Claude Code picked them up.
+- Sent comments stay as a history: **Comments** lists pending and sent comments for the whole stack and jumps to each one. On the diff, sent comments show as faded cards, marked *Outdated* once their lines changed; dismiss them one by one, clear the history, or hide them from the diff.
 - The page updates live after commits, restacks and Claude's file edits.
 
 Each session serves its own page on `127.0.0.1` with a fixed port, so several review pages can be open at once and an open tab reconnects after a restart. Requests need a random token in the page's URL, and other sites can't call it; see [SECURITY.md](SECURITY.md).

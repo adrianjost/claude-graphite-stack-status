@@ -16,6 +16,7 @@ await build({
   format: 'iife',
   target: 'es2022',
   legalComments: 'eof',
+  tsconfigRaw: {},
 })
 
 const css = [

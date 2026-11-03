@@ -46,6 +46,7 @@ const prefs = {
   format: stored('format', 'unified'),
   whitespace: stored('whitespace', false),
   compare: stored('compare', 'parent'),
+  showSent: stored('showSent', true),
   uncommitted: { true: 'all', false: 'committed' }[stored('uncommitted', 'all')] ?? stored('uncommitted', 'all'),
 }
 if (prefs.format !== 'unified' && prefs.format !== 'split') prefs.format = 'unified'
@@ -57,6 +58,9 @@ let current = null
 let renderedKey = ''
 let files = []
 let comments = []
+let sent = []
+let jumps = []
+let pendingJump = null
 let composer = null
 let shownHeavy = new Set()
 let collapsed = new Set()
@@ -90,6 +94,7 @@ function select(branch) {
   expansions = new Map()
   composer = null
   comments = stored(`comments:${branch}`, [])
+  sent = stored(`sent:${branch}`, [])
   renderStack()
   loadDiff(true)
   window.scrollTo(0, 0)
@@ -331,34 +336,65 @@ function targetOf(line) {
 
 const sameTarget = (a, b) => !!a && !!b && a.path === b.path && a.side === b.side && a.line === b.line
 
+const covers = (range, path, target) =>
+  !!range && range.path === path && range.side === target.side && (range.start ?? range.line) <= target.line && target.line <= range.line
+
+const rangeLabel = c => (c.start && c.start !== c.line ? `lines ${c.start}–${c.line}` : `line ${c.line}`)
+
 function lnCell(path, line, number, extra = '', column = 'new') {
   if (number === undefined) return `<td class="ln ${extra}"></td>`
   const target = targetOf(line)
-  const commented = comments.some(c => sameTarget(c, { path, ...target }))
+  const commented = comments.some(c => covers(c, path, target))
+  if (covers(composer, path, target)) extra += ' in-range'
   const isPending = column === 'new' && line.type !== 'del' && pending.get(path)?.has(line.new)
   return `<td class="ln ${extra}${commented ? ' commented' : ''}${isPending ? ' pending' : ''}"${isPending ? ' title="Uncommitted change"' : ''} data-path="${esc(path)}" data-side="${target.side}" data-line="${target.line}">${number}<button class="add-comment" tabindex="-1" title="Comment on this line">+</button></td>`
 }
 
 function threadRows(path, targets, colspan) {
   let html = ''
+  const row = (content, side) =>
+    colspan === 4
+      ? side === 'old'
+        ? `<tr class="thread"><td colspan="2">${content}</td><td colspan="2" class="thread-gap"></td></tr>`
+        : `<tr class="thread"><td colspan="2" class="thread-gap"></td><td colspan="2">${content}</td></tr>`
+      : `<tr class="thread"><td colspan="${colspan}">${content}</td></tr>`
   for (const target of targets) {
     const at = { path, ...target }
     for (const comment of comments.filter(c => sameTarget(c, at))) {
       if (composer && sameTarget(composer, at)) continue
       const index = comments.indexOf(comment)
-      html += `<tr class="thread"><td colspan="${colspan}"><div class="comment">
-        <div class="comment-head"><strong>You</strong><span class="badge">Pending</span><span class="spacer"></span>
+      html += row(
+        `<div class="comment">
+        <div class="comment-head"><strong>You</strong><span class="badge">Pending</span><span>on ${rangeLabel(comment)}</span><span class="spacer"></span>
           <button class="btn invisible" data-edit="${index}">Edit</button>
           <button class="btn invisible" data-remove="${index}">Delete</button></div>
-        <div class="comment-body">${esc(comment.text)}</div></div></td></tr>`
+        <div class="comment-body">${esc(comment.text)}</div></div>`,
+        target.side,
+      )
+    }
+    if (prefs.showSent) {
+      for (const comment of sent.filter(c => sameTarget(c, at))) {
+        const index = sent.indexOf(comment)
+        const outdated = codeAt(comment) !== (comment.code ?? '')
+        html += row(
+          `<div class="comment sent">
+          <div class="comment-head"><strong>You</strong><span class="badge sent">Sent to Claude</span>${outdated ? '<span class="badge">Outdated</span>' : ''}<span>${esc(timeAgo(comment.sentAt))}</span><span class="spacer"></span>
+            <button class="btn invisible" data-dismiss="${index}">Dismiss</button></div>
+          <div class="comment-body">${esc(comment.text)}</div></div>`,
+          target.side,
+        )
+      }
     }
     if (composer && sameTarget(composer, at)) {
-      html += `<tr class="thread"><td colspan="${colspan}"><div class="composer">
-        <textarea placeholder="Leave a comment for Claude…">${esc(composer.text ?? '')}</textarea>
+      html += row(
+        `<div class="composer">
+        <textarea placeholder="Leave a comment for Claude on ${rangeLabel(composer)}…">${esc(composer.text ?? '')}</textarea>
         <div class="actions"><span class="muted hint">⌘↵ to save · Esc to cancel</span>
           <button class="btn" data-act="cancel">Cancel</button>
           <button class="btn primary" data-act="save">${composer.text ? 'Update comment' : 'Add comment'}</button></div>
-        </div></td></tr>`
+        </div>`,
+        target.side,
+      )
     }
   }
   return html
@@ -603,7 +639,8 @@ function renderHeader() {
       <button class="btn icon" data-nav="-1" ${index >= order.length - 1 ? 'disabled' : ''} title="Parent branch ( [ )">${ICONS.downArrow}</button>
       <button class="btn icon" data-nav="1" ${index <= 0 ? 'disabled' : ''} title="Child branch ( ] )">${ICONS.up}</button>
       <button class="btn" data-act="collapse-all">${allClosed ? 'Expand all' : 'Collapse all'}</button>
-      <button class="btn primary" data-act="review">Review${comments.length ? ` <span class="count">${comments.length}</span>` : ''}</button>
+      <button class="btn" data-act="comments" title="All comments">Comments</button>
+      <button class="btn primary" data-act="review">Review${pendingCount() ? ` <span class="count">${pendingCount()}</span>` : ''}</button>
     </div>`
   document.documentElement.style.setProperty('--header-height', `${$('#header').offsetHeight}px`)
 }
@@ -622,6 +659,7 @@ function renderAll() {
   renderHeader()
   renderSidebar()
   renderDiff()
+  renderCommentViews()
   window.scrollTo(0, scroll)
 }
 
@@ -667,6 +705,7 @@ async function loadDiff(force = false) {
   for (const path of reopen) expansions.set(path, { ...expansions.get(path), text: undefined })
   renderAll()
   for (const path of reopen) expand(path, null)
+  applyJump()
 }
 
 async function expand(path, key) {
@@ -684,14 +723,94 @@ async function expand(path, key) {
   rerenderFile(path)
 }
 
+const pendingCount = () => collect('comments').length
+
 function persistComments() {
   store(`comments:${selected}`, comments.length ? comments : undefined)
+}
+
+function timeAgo(at) {
+  const minutes = Math.round((Date.now() - (at ?? 0)) / 60_000)
+  if (minutes < 1) return 'just now'
+  if (minutes < 60) return `${minutes} min ago`
+  const hours = Math.round(minutes / 60)
+  return hours < 24 ? `${hours} h ago` : new Date(at).toLocaleDateString()
+}
+
+function collect(kind) {
+  return stackRows().flatMap(row => {
+    const list = row.branch === selected ? (kind === 'comments' ? comments : sent) : stored(`${kind}:${row.branch}`, [])
+    return list.map((comment, index) => ({ ...comment, branch: row.branch, index }))
+  })
+}
+
+function commentItems(list, kind) {
+  if (!list.length) return ''
+  const groups = new Map()
+  for (const comment of list) groups.set(comment.branch, [...(groups.get(comment.branch) ?? []), comment])
+  let html = ''
+  for (const [branch, items] of groups) {
+    html += `<div class="group-head">${esc(branch)}</div>`
+    for (const comment of items) {
+      jumps.push(comment)
+      html += `<div class="comment-item${kind === 'sent' ? ' sent' : ''}" data-jump="${jumps.length - 1}">
+        <div class="where"><code>${esc(comment.path)}:${comment.start && comment.start !== comment.line ? `${comment.start}–${comment.line}` : comment.line}</code>
+          ${kind === 'sent' ? `<span class="muted">${esc(timeAgo(comment.sentAt))}</span>` : ''}</div>
+        <div class="text">${esc(comment.text)}</div></div>`
+    }
+  }
+  return html
+}
+
+function renderCommentViews() {
+  jumps = []
+  const pendingAll = collect('comments')
+  const sentAll = collect('sent')
+  $('#submit-list').innerHTML = pendingAll.length
+    ? `<div class="list-head">${pendingAll.length} pending comment${pendingAll.length === 1 ? '' : 's'}</div>${commentItems(pendingAll, 'pending')}`
+    : '<div class="list-head muted">No line comments yet: drag over line numbers to add some.</div>'
+  $('#comments-list').innerHTML =
+    `<div class="list-head">Pending (${pendingAll.length})</div>${commentItems(pendingAll, 'pending') || '<div class="empty-note">Nothing pending.</div>'}` +
+    `<div class="list-head">Sent to Claude (${sentAll.length})${sentAll.length ? '<button class="btn invisible" data-act="clear-sent">Clear</button>' : ''}</div>${commentItems(sentAll, 'sent') || '<div class="empty-note">Comments you send stay here as a history.</div>'}`
+  const toggle = document.querySelector('[data-toggle="show-sent"]')
+  if (toggle) toggle.checked = prefs.showSent
+}
+
+function applyJump() {
+  const target = pendingJump
+  if (!target || target.branch !== selected || !files.length) return
+  pendingJump = null
+  const file = files.find(f => f.path === target.path)
+  if (!file) return
+  if (isCollapsed(file)) {
+    collapsed.delete(file.path)
+    if (isViewed(file)) collapsed.add(`open:${file.path}`)
+    rerenderFile(file.path)
+  }
+  const cell = [...document.querySelectorAll('#diff td.ln[data-line]')].find(
+    c => c.dataset.path === target.path && c.dataset.side === target.side && Number(c.dataset.line) === target.line,
+  )
+  if (!cell) {
+    scrollToFile(target.path)
+    return
+  }
+  const top = cell.getBoundingClientRect().top + window.scrollY - $('#header').offsetHeight - 120
+  window.scrollTo({ top })
+  cell.closest('tr').classList.add('flash')
+  setTimeout(() => cell.closest('tr')?.classList.remove('flash'), 1600)
+}
+
+function jumpTo(target) {
+  pendingJump = target
+  if (target.branch === selected) applyJump()
+  else select(target.branch)
 }
 
 function openComposer(target) {
   const existing = comments.find(c => sameTarget(c, target))
   const previous = composer?.path
-  composer = { path: target.path, side: target.side, line: target.line, text: existing?.text ?? '' }
+  const start = target.start ?? existing?.start ?? target.line
+  composer = { path: target.path, side: target.side, start, line: target.line, text: existing?.text ?? '' }
   if (previous && previous !== target.path) rerenderFile(previous)
   rerenderFile(target.path)
   const area = document.querySelector('.composer textarea')
@@ -699,27 +818,36 @@ function openComposer(target) {
   area?.setSelectionRange(area.value.length, area.value.length)
 }
 
-function codeAt(target) {
-  const file = files.find(f => f.path === target.path)
+function codeAt(range) {
+  const file = files.find(f => f.path === range.path)
+  const found = new Map()
   for (const hunk of file?.hunks ?? []) {
-    const line = numberLines(hunk).find(l => sameTarget({ path: target.path, ...targetOf(l) }, target))
-    if (line) return line.text
+    for (const line of numberLines(hunk)) {
+      if (covers(range, range.path, targetOf(line))) found.set(targetOf(line).line, line.text)
+    }
   }
-  const text = expansions.get(target.path)?.text
-  return target.side === 'new' && text ? (text.split('\n')[target.line - 1] ?? '') : ''
+  const text = expansions.get(range.path)?.text?.split('\n')
+  const out = []
+  for (let n = range.start ?? range.line; n <= range.line; n++) {
+    const line = found.get(n) ?? (range.side === 'new' ? text?.[n - 1] : undefined)
+    if (line !== undefined) out.push(line)
+  }
+  return out.join('\n')
 }
 
 function saveComposer() {
   if (!composer) return
   const text = document.querySelector('.composer textarea')?.value.trim() ?? ''
   const target = { path: composer.path, side: composer.side, line: composer.line }
+  const range = composer.start !== composer.line ? { ...target, start: composer.start } : target
   comments = comments.filter(c => !sameTarget(c, target))
-  if (text) comments.push({ ...target, text, code: codeAt(target) })
+  if (text) comments.push({ ...range, text, code: codeAt(range), base: current?.parent })
   comments.sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line)
   composer = null
   persistComments()
   rerenderFile(target.path)
   renderHeader()
+  renderCommentViews()
 }
 
 function closeComposer() {
@@ -730,24 +858,33 @@ function closeComposer() {
 }
 
 function clearComments() {
-  const paths = new Set(comments.map(c => c.path))
+  for (const row of stackRows()) store(`comments:${row.branch}`, undefined)
   comments = []
-  persistComments()
-  paths.forEach(rerenderFile)
-  renderHeader()
+  renderAll()
+}
+
+async function waitForDelivery(id) {
+  for (let i = 0; i < 60; i++) {
+    const status = await api(`/action?id=${id}`).catch(() => null)
+    if (status?.delivered) return true
+    await new Promise(resolve => setTimeout(resolve, 1000))
+  }
+  return false
 }
 
 async function sendReview() {
   const button = document.querySelector('#submit [data-act="send"]')
   const summary = $('#summary').value.trim()
-  if (!comments.length && !summary) {
+  const pendingAll = collect('comments').map(({ index, ...comment }) => comment)
+  if (!pendingAll.length && !summary) {
     $('#summary').focus()
     return
   }
   button.disabled = true
   button.textContent = 'Sending…'
+  let id
   try {
-    await api('/action', {
+    ;({ id } = await api('/action', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -756,21 +893,33 @@ async function sendReview() {
         compareTo: current?.parent,
         includesUncommitted: !!current?.includeWorktree,
         summary,
-        comments,
+        comments: pendingAll,
       }),
-    })
-    $('#summary').value = ''
-    clearComments()
-    button.textContent = 'Sent to Claude ✓'
-    setTimeout(() => ($('#submit').hidden = true), 900)
+    }))
   } catch {
     button.textContent = 'Failed, retry'
-  } finally {
     setTimeout(() => {
       button.disabled = false
       button.textContent = 'Send to Claude'
-    }, 1200)
+    }, 1500)
+    return
   }
+  $('#summary').value = ''
+  const sentAt = Date.now()
+  for (const row of stackRows()) {
+    const mine = pendingAll.filter(c => c.branch === row.branch).map(({ branch, ...c }) => ({ ...c, sentAt }))
+    if (mine.length) store(`sent:${row.branch}`, [...stored(`sent:${row.branch}`, []), ...mine])
+  }
+  sent = stored(`sent:${selected}`, [])
+  clearComments()
+  button.textContent = 'Waiting for Claude Code…'
+  const delivered = await waitForDelivery(id)
+  button.textContent = delivered ? 'Delivered to Claude ✓' : 'Queued: Claude Code will pick it up'
+  setTimeout(() => {
+    $('#submit').hidden = true
+    button.disabled = false
+    button.textContent = 'Send to Claude'
+  }, delivered ? 1200 : 4000)
 }
 
 function navigate(step) {
@@ -799,12 +948,8 @@ function scrollToFile(path) {
 
 document.addEventListener('click', event => {
   const t = event.target
-  const ln = t.closest('td.ln[data-line]')
-  if (ln) {
-    openComposer({ path: ln.dataset.path, side: ln.dataset.side, line: Number(ln.dataset.line) })
-    return
-  }
-  const el = t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-goto],[data-edit],[data-remove]')
+  if (t.closest('td.ln[data-line]')) return
+  const el = t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-jump]')
   if (!t.closest('#submit') && !t.closest('[data-act="review"]')) $('#submit').hidden = true
   if (!el) return
   const d = el.dataset
@@ -852,6 +997,28 @@ document.addEventListener('click', event => {
     persistComments()
     if (comment) rerenderFile(comment.path)
     renderHeader()
+    renderCommentViews()
+  }
+  if (d.dismiss) {
+    const [comment] = sent.splice(Number(d.dismiss), 1)
+    store(`sent:${selected}`, sent.length ? sent : undefined)
+    if (comment) rerenderFile(comment.path)
+    renderCommentViews()
+  }
+  if (d.jump) {
+    const target = jumps[Number(d.jump)]
+    $('#submit').hidden = true
+    if (target) jumpTo(target)
+  }
+  if (d.act === 'comments') {
+    renderCommentViews()
+    $('#comments-panel').hidden = !$('#comments-panel').hidden
+  }
+  if (d.act === 'close-comments') $('#comments-panel').hidden = true
+  if (d.act === 'clear-sent') {
+    for (const row of stackRows()) store(`sent:${row.branch}`, undefined)
+    sent = []
+    renderAll()
   }
   if (d.act === 'save') saveComposer()
   if (d.act === 'cancel') closeComposer()
@@ -861,6 +1028,7 @@ document.addEventListener('click', event => {
     renderAll()
   }
   if (d.act === 'review') {
+    renderCommentViews()
     $('#submit').hidden = !$('#submit').hidden
     if (!$('#submit').hidden) $('#summary').focus()
   }
@@ -869,6 +1037,51 @@ document.addEventListener('click', event => {
     clearComments()
     $('#submit').hidden = true
   }
+})
+
+let drag = null
+
+const cellTarget = cell => ({ path: cell.dataset.path, side: cell.dataset.side, line: Number(cell.dataset.line) })
+
+function paintDrag() {
+  const from = Math.min(drag.start, drag.end)
+  const to = Math.max(drag.start, drag.end)
+  for (const cell of document.querySelectorAll('#diff td.ln[data-line]')) {
+    const at = cellTarget(cell)
+    cell.classList.toggle('in-range', at.path === drag.path && at.side === drag.side && from <= at.line && at.line <= to)
+  }
+}
+
+document.addEventListener('mousedown', event => {
+  const cell = event.button === 0 && event.target.closest('#diff td.ln[data-line]')
+  if (!cell) return
+  event.preventDefault()
+  const at = cellTarget(cell)
+  const extend = event.shiftKey && composer && composer.path === at.path && composer.side === at.side
+  drag = { path: at.path, side: at.side, start: extend ? composer.start : at.line, end: at.line }
+  document.body.classList.add('selecting')
+  paintDrag()
+})
+
+document.addEventListener('mouseover', event => {
+  if (!drag) return
+  const row = event.target.closest('#diff tr')
+  const cell = [...(row?.querySelectorAll('td.ln[data-line]') ?? [])].find(
+    c => c.dataset.path === drag.path && c.dataset.side === drag.side,
+  )
+  if (!cell) return
+  const at = cellTarget(cell)
+  if (at.path !== drag.path || at.side !== drag.side || at.line === drag.end) return
+  drag.end = at.line
+  paintDrag()
+})
+
+document.addEventListener('mouseup', () => {
+  if (!drag) return
+  const { path, side, start, end } = drag
+  drag = null
+  document.body.classList.remove('selecting')
+  openComposer({ path, side, start: Math.min(start, end), line: Math.max(start, end) })
 })
 
 document.addEventListener('change', event => {
@@ -885,6 +1098,11 @@ document.addEventListener('change', event => {
     if (t.checked && cardOf(file.path).getBoundingClientRect().top < $('#header').offsetHeight) scrollToFile(file.path)
   }
   if (t.dataset.toggle === 'whitespace') setPref('whitespace', !t.checked)
+  if (t.dataset.toggle === 'show-sent') {
+    prefs.showSent = t.checked
+    store('showSent', t.checked ? undefined : false)
+    renderDiff()
+  }
 })
 
 document.addEventListener('keydown', event => {
@@ -935,4 +1153,5 @@ async function poll() {
 }
 
 comments = stored(`comments:${selected}`, [])
+sent = stored(`sent:${selected}`, [])
 poll()
