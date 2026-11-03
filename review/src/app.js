@@ -629,14 +629,21 @@ function renderDescription() {
       }`
     }
   }
+  sizeDescription()
+  requestAnimationFrame(sizeDescription)
+  renderDescriptionThreads()
+}
+
+function sizeDescription() {
+  const section = $('#description')
+  if (section.hidden) return
   const inner = section.querySelector('.description-body')
   section.classList.toggle('open', descriptionOpen)
-  const overflows = inner.scrollHeight > 200
+  const overflows = inner.scrollHeight > 220
   section.classList.toggle('capped', overflows && !descriptionOpen)
   const toggle = section.querySelector('.description-toggle')
   toggle.hidden = !overflows
   toggle.textContent = descriptionOpen ? 'Show less' : 'Show all'
-  renderDescriptionThreads()
 }
 
 let describing = null

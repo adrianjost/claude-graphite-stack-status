@@ -1541,3 +1541,12 @@ td.code:not(.empty) {
   white-space: pre-wrap;
   font-size: 14px;
 }
+
+td.ln[data-line]:has(+ td.code:hover) .add-comment,
+tr.del > td.ln[data-line]:first-child:has(~ td.code:hover) .add-comment {
+  display: block;
+}
+
+td.ln[data-line]:has(+ td.code:hover) {
+  color: var(--text);
+}
