@@ -1137,7 +1137,11 @@ async function submitBranch(button) {
   button.disabled = true
   button.textContent = 'Asking Claude…'
   const result = await runAction({ type: 'submit-branch', branch: selected }).catch(() => null)
-  button.textContent = result?.ok ? 'Claude is submitting it ✓' : 'Claude Code did not answer'
+  button.textContent = !result?.ok
+    ? 'Claude Code did not answer'
+    : result.data?.queued
+      ? 'Queued for Claude ✓'
+      : 'Claude is submitting it ✓'
   setTimeout(() => {
     if (!button.isConnected) return
     button.disabled = false
@@ -1218,14 +1222,16 @@ async function sendReview() {
     return
   }
   button.textContent = 'Waiting for Claude Code…'
-  if (await waitForDelivery(id, 20)) {
+  const result = await waitForDelivery(id, 30)
+  if (result) {
     finishReview(pendingAll)
-    button.textContent = 'Delivered to Claude ✓'
+    const queued = result.data?.queued
+    button.textContent = queued ? 'Queued: Claude reads it after its current task ✓' : 'Delivered to Claude ✓'
     setTimeout(() => {
       $('#submit').hidden = true
       button.disabled = false
       button.textContent = 'Send to Claude'
-    }, 1200)
+    }, queued ? 2500 : 1200)
     return
   }
   const cancel = await api('/action-cancel', {
@@ -1238,7 +1244,7 @@ async function sendReview() {
     reset('Delivered to Claude ✓', 1200)
     return
   }
-  reset("Claude Code didn't pick it up: your comments are kept, retry", 4000)
+  reset("Claude Code isn't reachable: your comments are kept, retry", 4000)
 }
 
 function navigate(step) {

@@ -17,6 +17,7 @@ const isHidden = atom({ plugin: 'graphite-stack', key: 'isHidden' } as const, fa
 const linkTarget = atom({ plugin: 'graphite-stack', key: 'linkTarget' } as const, 'github' as LinkTarget)
 const working = atom({ plugin: 'graphite-stack', key: 'working' } as const, null as string | null)
 const reviewUrl = atom({ plugin: 'graphite-stack', key: 'reviewUrl' } as const, null as string | null)
+const waitingPrompts = atom({ plugin: 'graphite-stack', key: 'waitingPrompts' } as const, [] as string[])
 const REVIEW_PORT_BASE = 47100
 const REVIEW_PORTS = 1800
 const STACK_ACTION_TIMEOUT_MS = 3 * 60_000
@@ -711,9 +712,36 @@ function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
     .join('\n')
 }
 
+let actionLoop = 0
+let turnRunning = false
+function submitPrompt($: Engine, text: string) {
+  void $.prompt
+    .submit({ text, asUser: true })
+    .catch(error => $.ui.toast(`Couldn't hand this to Claude: ${String(error)}`, { timeoutMs: 10_000 }))
+}
+
+async function queuePrompt($: Engine, text: string) {
+  if (turnRunning) await update($, waitingPrompts, list => [...list, text])
+  else submitPrompt($, text)
+}
+
+async function flushPrompts($: Engine) {
+  const batch = await read($, waitingPrompts)
+  if (!batch.length) return
+  await update($, waitingPrompts, () => [])
+  submitPrompt(
+    $,
+    batch.length === 1
+      ? batch[0]!
+      : `${batch.length} requests from the review page came in while you were busy. Handle them in order:\n\n` +
+          batch.map((text, i) => `## ${i + 1}.\n\n${text}`).join('\n\n'),
+  )
+}
+
 async function pollReviewActions($: Engine, port: number) {
   const handled = new Set<number>()
-  while (review?.port === port) {
+  const loop = ++actionLoop
+  while (review?.port === port && loop === actionLoop) {
     const base = `http://127.0.0.1:${port}`
     const token = review.token
     let actions: (PageAction & { id: number })[] = []
@@ -736,18 +764,13 @@ async function pollReviewActions($: Engine, port: number) {
         const row = rows.find(r => r.branch === action.branch && !r.isTrunk)
         if (!row) results[action.id] = { ok: false, message: 'That branch is not part of the stack.' }
         else {
-          try {
-            await $.prompt.submit({
-              text:
-                `Submit ${layerLabel(rows, row.branch)} to GitHub with Graphite (\`gt submit\` for that branch), ` +
-                'opening its PR as a draft and submitting unsubmitted layers below it as needed. ' +
-                "Use the commit message as the PR title and description, and don't change any code.",
-              asUser: true,
-            })
-            results[action.id] = { ok: true }
-          } catch (error) {
-            results[action.id] = { ok: false, message: String(error) }
-          }
+          await queuePrompt(
+            $,
+            `Submit ${layerLabel(rows, row.branch)} to GitHub with Graphite (\`gt submit\` for that branch), ` +
+              'opening its PR as a draft and submitting unsubmitted layers below it as needed. ' +
+              "Use the commit message as the PR title and description, and don't change any code.",
+          )
+          results[action.id] = { ok: true, data: { queued: turnRunning } }
         }
       }
       if (!handled.has(action.id) && action.type === 'reviewers-set' && Number.isInteger(action.number)) {
@@ -761,12 +784,8 @@ async function pollReviewActions($: Engine, port: number) {
         requestRefresh($, 'force')
       }
       if (!handled.has(action.id) && action.type === 'review' && (action.comments.length || action.summary)) {
-        try {
-          await $.prompt.submit({ text: reviewPrompt(action, (await read($, snapshot)).rows), asUser: true })
-        } catch (error) {
-          $.ui.toast(`Couldn't hand the review to Claude: ${String(error)}`, { timeoutMs: 10_000 })
-          continue
-        }
+        await queuePrompt($, reviewPrompt(action, (await read($, snapshot)).rows))
+        results[action.id] = { ok: true, data: { queued: turnRunning } }
       }
       handled.add(action.id)
       done.push(action.id)
@@ -1196,6 +1215,27 @@ export const register: Register = on => {
     if (!hidden) void refresh($, 'force')
 
     return { text: hidden ? 'Graphite stack hidden.' : 'Graphite stack shown.' }
+  })
+
+  on('turn.start', async ($, e, next) => {
+    if (!e.agentId) turnRunning = true
+    return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    const done = await next(e)
+    if (!e.agentId) {
+      turnRunning = false
+      await flushPrompts($)
+    }
+    return done
+  })
+
+  on('turn.abort', async ($, e, next) => {
+    const done = await next(e)
+    turnRunning = false
+    await flushPrompts($)
+    return done
   })
 
   on('session.attach', async ($, e, next) => {

@@ -62,6 +62,6 @@ export type StackSnapshot = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'graphite-stack': { snapshot: StackSnapshot; isHidden: boolean; linkTarget: LinkTarget; working: string | null; reviewUrl: string | null }
+    'graphite-stack': { snapshot: StackSnapshot; isHidden: boolean; linkTarget: LinkTarget; working: string | null; reviewUrl: string | null; waitingPrompts: string[] }
   }
 }
