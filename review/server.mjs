@@ -193,6 +193,12 @@ const server = http.createServer(async (req, res) => {
       actionWaiters = []
       return send(res, 200, { ok: true, id })
     }
+    if (url.pathname === '/action-cancel' && req.method === 'POST') {
+      const id = Number((await readBody(req, 1024)).id)
+      const before = actions.length
+      actions = actions.filter(a => a.id !== id)
+      return send(res, 200, { cancelled: actions.length < before, delivered: delivered.has(id) })
+    }
     if (url.pathname === '/action') {
       const id = Number(url.searchParams.get('id'))
       return send(res, 200, { delivered: delivered.has(id), result: delivered.get(id), pending: actions.some(a => a.id === id) })

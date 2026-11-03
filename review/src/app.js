@@ -43,6 +43,36 @@ const store = (key, value) => {
   } catch {}
 }
 
+const session = {
+  get(key) {
+    try {
+      return JSON.parse(sessionStorage.getItem(key) ?? 'null')
+    } catch {
+      return null
+    }
+  },
+  set(key, value) {
+    try {
+      if (value === null) sessionStorage.removeItem(key)
+      else sessionStorage.setItem(key, JSON.stringify(value))
+    } catch {}
+  },
+}
+
+function saveDraft() {
+  if (!selected) return
+  const summary = $('#summary')?.value ?? ''
+  const draft = { summary, composer, describing }
+  session.set(`draft:${selected}`, summary || composer || describing ? draft : null)
+}
+
+function restoreDraft() {
+  const draft = session.get(`draft:${selected}`)
+  $('#summary').value = draft?.summary ?? ''
+  composer = draft?.composer ?? null
+  describing = draft?.describing ?? null
+}
+
 const prefs = {
   format: stored('format', 'split'),
   whitespace: stored('whitespace', false),
@@ -93,11 +123,10 @@ function select(branch) {
   shownHeavy = new Set()
   collapsed = new Set()
   expansions = new Map()
-  composer = null
   descriptionOpen = false
-  describing = null
   comments = stored(`comments:${branch}`, [])
   sent = stored(`sent:${branch}`, [])
+  restoreDraft()
   renderStack()
   loadDiff(true)
   window.scrollTo(0, 0)
@@ -684,6 +713,7 @@ function openDescribe(quote, index) {
   renderDescriptionThreads()
   const area = $('#description .composer textarea')
   area?.focus()
+  saveDraft()
 }
 
 function saveDescribe() {
@@ -698,6 +728,7 @@ function saveDescribe() {
   persistComments()
   renderHeader()
   renderCommentViews()
+  saveDraft()
 }
 
 function descriptionSelection() {
@@ -1043,6 +1074,7 @@ function openComposer(target) {
   const area = document.querySelector('.composer textarea')
   area?.focus()
   area?.setSelectionRange(area.value.length, area.value.length)
+  saveDraft()
 }
 
 function codeAt(range) {
@@ -1075,6 +1107,7 @@ function saveComposer() {
   rerenderFile(target.path)
   renderHeader()
   renderCommentViews()
+  saveDraft()
 }
 
 function closeComposer() {
@@ -1082,6 +1115,7 @@ function closeComposer() {
   const path = composer.path
   composer = null
   rerenderFile(path)
+  saveDraft()
 }
 
 function clearComments() {
@@ -1090,8 +1124,8 @@ function clearComments() {
   renderAll()
 }
 
-async function waitForDelivery(id) {
-  for (let i = 0; i < 60; i++) {
+async function waitForDelivery(id, seconds = 60) {
+  for (let i = 0; i < seconds; i++) {
     const status = await api(`/action?id=${id}`).catch(() => null)
     if (status?.delivered) return status.result ?? { ok: true }
     await new Promise(resolve => setTimeout(resolve, 1000))
@@ -1139,6 +1173,15 @@ async function setReady(button) {
   }, 4000)
 }
 
+function finishReview(pendingAll) {
+  const sentAt = Date.now()
+  sent = [...sent, ...pendingAll.map(({ branch, ...c }) => ({ ...c, sentAt }))]
+  store(`sent:${selected}`, sent)
+  $('#summary').value = ''
+  saveDraft()
+  clearComments()
+}
+
 async function sendReview() {
   const button = document.querySelector('#submit [data-act="send"]')
   const summary = $('#summary').value.trim()
@@ -1149,6 +1192,11 @@ async function sendReview() {
     $('#summary').focus()
     return
   }
+  const reset = (text, ms) =>
+    setTimeout(() => {
+      button.disabled = false
+      button.textContent = 'Send to Claude'
+    }, ms) && (button.textContent = text)
   button.disabled = true
   button.textContent = 'Sending…'
   let id
@@ -1166,26 +1214,31 @@ async function sendReview() {
       }),
     }))
   } catch {
-    button.textContent = 'Failed, retry'
-    setTimeout(() => {
-      button.disabled = false
-      button.textContent = 'Send to Claude'
-    }, 1500)
+    reset("Couldn't send: retry", 2500)
     return
   }
-  $('#summary').value = ''
-  const sentAt = Date.now()
-  sent = [...sent, ...pendingAll.map(({ branch, ...c }) => ({ ...c, sentAt }))]
-  store(`sent:${selected}`, sent)
-  clearComments()
   button.textContent = 'Waiting for Claude Code…'
-  const delivered = await waitForDelivery(id)
-  button.textContent = delivered ? 'Delivered to Claude ✓' : 'Queued: Claude Code will pick it up'
-  setTimeout(() => {
-    $('#submit').hidden = true
-    button.disabled = false
-    button.textContent = 'Send to Claude'
-  }, delivered ? 1200 : 4000)
+  if (await waitForDelivery(id, 20)) {
+    finishReview(pendingAll)
+    button.textContent = 'Delivered to Claude ✓'
+    setTimeout(() => {
+      $('#submit').hidden = true
+      button.disabled = false
+      button.textContent = 'Send to Claude'
+    }, 1200)
+    return
+  }
+  const cancel = await api('/action-cancel', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id }),
+  }).catch(() => null)
+  if (cancel?.delivered) {
+    finishReview(pendingAll)
+    reset('Delivered to Claude ✓', 1200)
+    return
+  }
+  reset("Claude Code didn't pick it up: your comments are kept, retry", 4000)
 }
 
 function navigate(step) {
@@ -1476,6 +1529,7 @@ document.addEventListener('click', event => {
   if (d.act === 'describe-cancel') {
     describing = null
     renderDescriptionThreads()
+    saveDraft()
   }
   if (d.describeEdit !== undefined) openDescribe('', Number(d.describeEdit))
   if (d.act === 'toggle-description') {
@@ -1579,6 +1633,7 @@ document.addEventListener('keydown', event => {
     if (event.key === 'Escape') {
       describing = null
       renderDescriptionThreads()
+      saveDraft()
     }
     return
   }
@@ -1601,6 +1656,15 @@ document.addEventListener('keydown', event => {
 })
 
 document.addEventListener('input', event => {
+  const area = event.target
+  if (area.id === 'summary') saveDraft()
+  if (area.closest?.('#description .composer') && describing) {
+    describing.text = area.value
+    saveDraft()
+  } else if (area.closest?.('#diff .composer') && composer) {
+    composer.text = area.value
+    saveDraft()
+  }
   if (event.target.closest('#picker input') && picker) searchPicker(event.target.value.trim())
 })
 
@@ -1626,7 +1690,7 @@ async function poll() {
         if (fallback) select(fallback.branch)
       }
       renderStack()
-      if (!composer) loadDiff(restarted)
+      if (!composer || !renderedKey) loadDiff(restarted)
     } catch {
       $('#connection').className = 'connection offline'
       $('#connection').title = 'Disconnected: waiting for Claude Code'
@@ -1637,4 +1701,5 @@ async function poll() {
 
 comments = stored(`comments:${selected}`, [])
 sent = stored(`sent:${selected}`, [])
+restoreDraft()
 poll()
