@@ -655,6 +655,11 @@ function prInfo(pr) {
     .join('')
   return `<div class="pr-info">
     <span class="state ${status}">${status[0].toUpperCase()}${status.slice(1)}</span>
+    ${
+      pr.state === 'OPEN'
+        ? `<button class="btn" data-act="pr-ready" data-number="${pr.number}" data-ready="${pr.isDraft}">${pr.isDraft ? 'Ready for review' : 'Convert to draft'}</button>`
+        : ''
+    }
     ${reviewers ? `<span class="reviewers"><span class="muted">Reviewers</span>${reviewers}</span>` : '<span class="muted">No reviewers</span>'}
     ${labels ? `<span class="labels">${labels}</span>` : ''}
   </div>`
@@ -833,7 +838,7 @@ async function expand(path, key) {
   rerenderFile(path)
 }
 
-const pendingCount = () => collect('comments').length
+const pendingCount = () => comments.length
 
 function persistComments() {
   store(`comments:${selected}`, comments.length ? comments : undefined)
@@ -876,9 +881,14 @@ function renderCommentViews() {
   jumps = []
   const pendingAll = collect('comments')
   const sentAll = collect('sent')
-  $('#submit-list').innerHTML = pendingAll.length
-    ? `<div class="list-head">${pendingAll.length} pending comment${pendingAll.length === 1 ? '' : 's'}</div>${commentItems(pendingAll, 'pending')}`
-    : '<div class="list-head muted">No line comments yet: drag over line numbers to add some.</div>'
+  const layer = pendingAll.filter(c => c.branch === selected)
+  $('#submit-list').innerHTML = layer.length
+    ? `<div class="list-head">${layer.length} pending comment${layer.length === 1 ? '' : 's'} on this layer</div>${commentItems(layer, 'pending')}`
+    : '<div class="list-head muted">No line comments on this layer yet: drag over line numbers to add some.</div>'
+  const elsewhere = pendingAll.length - layer.length
+  if (elsewhere) {
+    $('#submit-list').innerHTML += `<div class="empty-note">${elsewhere} more pending on other layers; open them to review them.</div>`
+  }
   $('#comments-list').innerHTML =
     `<div class="list-head">Pending (${pendingAll.length})</div>${commentItems(pendingAll, 'pending') || '<div class="empty-note">Nothing pending.</div>'}` +
     `<div class="list-head">Sent to Claude (${sentAll.length})${sentAll.length ? '<button class="btn invisible" data-act="clear-sent">Clear</button>' : ''}</div>${commentItems(sentAll, 'sent') || '<div class="empty-note">Comments you send stay here as a history.</div>'}`
@@ -968,24 +978,54 @@ function closeComposer() {
 }
 
 function clearComments() {
-  for (const row of stackRows()) store(`comments:${row.branch}`, undefined)
   comments = []
+  persistComments()
   renderAll()
 }
 
 async function waitForDelivery(id) {
   for (let i = 0; i < 60; i++) {
     const status = await api(`/action?id=${id}`).catch(() => null)
-    if (status?.delivered) return true
+    if (status?.delivered) return status.result ?? { ok: true }
     await new Promise(resolve => setTimeout(resolve, 1000))
   }
-  return false
+  return null
+}
+
+async function setReady(button) {
+  const ready = button.dataset.ready === 'true'
+  const original = button.textContent
+  button.disabled = true
+  button.textContent = ready ? 'Marking ready…' : 'Converting…'
+  try {
+    const { id } = await api('/action', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'pr-ready', number: Number(button.dataset.number), ready }),
+    })
+    const result = await waitForDelivery(id)
+    if (!result) button.textContent = 'Waiting for Claude Code…'
+    else if (!result.ok) {
+      button.textContent = 'Failed'
+      button.title = result.message ?? ''
+      $('#notice').textContent = `GitHub refused the change: ${result.message ?? 'unknown error'}`
+    } else button.textContent = ready ? 'Ready ✓' : 'Draft ✓'
+  } catch {
+    button.textContent = 'Failed'
+  }
+  setTimeout(() => {
+    if (!button.isConnected) return
+    button.disabled = false
+    button.textContent = original
+  }, 4000)
 }
 
 async function sendReview() {
   const button = document.querySelector('#submit [data-act="send"]')
   const summary = $('#summary').value.trim()
-  const pendingAll = collect('comments').map(({ index, ...comment }) => comment)
+  const pendingAll = collect('comments')
+    .filter(c => c.branch === selected)
+    .map(({ index, ...comment }) => comment)
   if (!pendingAll.length && !summary) {
     $('#summary').focus()
     return
@@ -1016,11 +1056,8 @@ async function sendReview() {
   }
   $('#summary').value = ''
   const sentAt = Date.now()
-  for (const row of stackRows()) {
-    const mine = pendingAll.filter(c => c.branch === row.branch).map(({ branch, ...c }) => ({ ...c, sentAt }))
-    if (mine.length) store(`sent:${row.branch}`, [...stored(`sent:${row.branch}`, []), ...mine])
-  }
-  sent = stored(`sent:${selected}`, [])
+  sent = [...sent, ...pendingAll.map(({ branch, ...c }) => ({ ...c, sentAt }))]
+  store(`sent:${selected}`, sent)
   clearComments()
   button.textContent = 'Waiting for Claude Code…'
   const delivered = await waitForDelivery(id)
@@ -1130,6 +1167,7 @@ document.addEventListener('click', event => {
     sent = []
     renderAll()
   }
+  if (d.act === 'pr-ready') setReady(el)
   if (d.act === 'toggle-description') {
     descriptionOpen = !descriptionOpen
     renderDescription()

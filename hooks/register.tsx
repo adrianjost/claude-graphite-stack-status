@@ -287,6 +287,10 @@ async function loadPrs($: Engine, cwd: string, branches: string[], force: boolea
 const GENERATED =
   /(^|\/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|Cargo\.lock|go\.sum|poetry\.lock|composer\.lock|Gemfile\.lock)$|\.gen(\.[^/]*)?$|\.min\.(js|css)$|\.snap$|(^|\/)(generated|__generated__|insurance-tables)\//
 
+function stackOrder(rows: StackRow[]) {
+  return [...rows].reverse().filter(row => !row.isTrunk && row.parent)
+}
+
 async function readMetadata($: Engine, cwd: string, gitDir: string) {
   const db = `${gitDir}/.graphite_metadata.db`
   if ((await run($, cwd, ['test', '-e', db])) === undefined) {
@@ -600,6 +604,7 @@ type ReviewComment = {
   text: string
   code?: string
 }
+type PrReadyAction = { type: 'pr-ready'; number: number; ready: boolean }
 type ReviewAction = {
   type: 'review'
   branch: string
@@ -609,27 +614,30 @@ type ReviewAction = {
   comments: ReviewComment[]
 }
 
-function reviewPrompt(action: ReviewAction) {
+function layerLabel(rows: StackRow[], branch: string) {
+  const layers = stackOrder(rows)
+  const at = layers.findIndex(row => row.branch === branch)
+  const pr = layers[at]?.pr
+  const layer = at >= 0 ? `stack layer ${at + 1} of ${layers.length}, ` : ''
+  return `${layer}\`${branch}\`${pr ? `, PR #${pr.number} "${pr.title}" (${pr.url})` : ' (no PR yet)'}`
+}
+
+function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
   const where = (c: ReviewComment) =>
     `\`${c.path}:${c.start && c.start !== c.line ? `${c.start}-${c.line}` : c.line}\`` +
     (c.side === 'old' ? ` (removed line${c.start && c.start !== c.line ? 's' : ''})` : '')
   const quote = (code?: string) =>
     code?.trim() ? `\n${code.replace(/\s+$/, '').split('\n').map(line => `   > ${line}`).join('\n')}` : ''
-  const groups = new Map<string, ReviewComment[]>()
-  for (const c of action.comments) {
-    const branch = c.branch ?? action.branch
-    groups.set(branch, [...(groups.get(branch) ?? []), c])
-  }
-  const sections = [...groups].map(([branch, comments]) => {
-    const base = comments.find(c => c.base)?.base ?? (branch === action.branch ? action.compareTo : undefined)
-    const items = comments.map((c, i) => `${i + 1}. ${where(c)}: ${c.text}${quote(c.code)}`)
-    return `On \`${branch}\`${base ? ` (changes against \`${base}\`)` : ''}:\n${items.join('\n')}`
-  })
+  const comments = action.comments.filter(c => (c.branch ?? action.branch) === action.branch)
+  const base = action.compareTo ?? comments.find(c => c.base)?.base
   return [
-    `Review feedback on my Graphite stack${action.includesUncommitted ? ' (it includes uncommitted changes)' : ''}:`,
+    `Review feedback on ${layerLabel(rows, action.branch)}` +
+      (base ? `, its changes against \`${base}\`` : '') +
+      (action.includesUncommitted ? ' including uncommitted changes' : '') +
+      ':',
     action.summary ? `\n${action.summary}` : '',
-    sections.length ? `\n${sections.join('\n\n')}` : '',
-    "\nAddress each point on the branch it belongs to. Don't push anything.",
+    comments.length ? `\n${comments.map((c, i) => `${i + 1}. ${where(c)}: ${c.text}${quote(c.code)}`).join('\n')}` : '',
+    `\nAddress each point on \`${action.branch}\`. Don't push anything.`,
   ]
     .filter(Boolean)
     .join('\n')
@@ -640,7 +648,7 @@ async function pollReviewActions($: Engine, port: number) {
   while (review?.port === port) {
     const base = `http://127.0.0.1:${port}`
     const token = review.token
-    let actions: (ReviewAction & { id: number })[] = []
+    let actions: ((ReviewAction | PrReadyAction) & { id: number })[] = []
     try {
       const response = await $.http.fetch(`${base}/actions?t=${token}`)
       actions = response.ok ? JSON.parse(response.text) : []
@@ -650,10 +658,18 @@ async function pollReviewActions($: Engine, port: number) {
       continue
     }
     const done: number[] = []
+    const results: Record<number, { ok: boolean; message?: string }> = {}
     for (const action of actions) {
+      if (!handled.has(action.id) && action.type === 'pr-ready' && Number.isInteger(action.number)) {
+        const cwd = await $.session.cwd()
+        const argv = ['gh', 'pr', 'ready', String(action.number), ...(action.ready ? [] : ['--undo'])]
+        const result = await exec($, cwd, argv).catch(error => ({ exitCode: 1, stdout: '', stderr: String(error) }))
+        results[action.id] = result.exitCode === 0 ? { ok: true } : { ok: false, message: (result.stderr || result.stdout).trim().split('\n')[0] }
+        requestRefresh($, 'force')
+      }
       if (!handled.has(action.id) && action.type === 'review' && (action.comments.length || action.summary)) {
         try {
-          await $.prompt.submit({ text: reviewPrompt(action), asUser: true })
+          await $.prompt.submit({ text: reviewPrompt(action, (await read($, snapshot)).rows), asUser: true })
         } catch (error) {
           $.ui.toast(`Couldn't hand the review to Claude: ${String(error)}`, { timeoutMs: 10_000 })
           continue
@@ -664,7 +680,7 @@ async function pollReviewActions($: Engine, port: number) {
     }
     if (done.length) {
       await $.http
-        .fetch(`${base}/actions?t=${token}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids: done }) })
+        .fetch(`${base}/actions?t=${token}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ids: done, results }) })
         .catch(() => undefined)
     }
   }

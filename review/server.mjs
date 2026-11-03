@@ -19,7 +19,7 @@ let stateWaiters = []
 let actions = []
 let actionWaiters = []
 let nextActionId = 1
-const delivered = new Set()
+const delivered = new Map()
 let lastSeen = 0
 
 function hasToken(value) {
@@ -183,11 +183,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/action') {
       const id = Number(url.searchParams.get('id'))
-      return send(res, 200, { delivered: delivered.has(id), pending: actions.some(a => a.id === id) })
+      return send(res, 200, { delivered: delivered.has(id), result: delivered.get(id), pending: actions.some(a => a.id === id) })
     }
     if (url.pathname === '/actions' && req.method === 'POST') {
-      const { ids = [] } = await readBody(req, 64 * 1024)
-      for (const id of ids) delivered.add(id)
+      const { ids = [], results = {} } = await readBody(req, 64 * 1024)
+      for (const id of ids) delivered.set(id, results[id] ?? { ok: true })
       actions = actions.filter(a => !ids.includes(a.id))
       return send(res, 200, { ok: true })
     }
