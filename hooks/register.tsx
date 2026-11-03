@@ -1094,8 +1094,8 @@ export const register: Register = on => {
             label={busy && !busy.startsWith('Restacking') ? 'Syncing…' : 'Sync with main'}
             onPress={() => void stackAction($)}
           />
-          <Button key="refresh" plain dimColor hotkey="r" label="Refresh" onPress={() => void refresh($, 'force')} />
-          <Button key="hide" plain dimColor hotkey="h" label="Hide" onPress={() => void update($, isHidden, () => true)} />
+          <Button key="refresh" plain dimColor label="Refresh" onPress={() => void refresh($, 'force')} />
+          <Button key="hide" plain dimColor label="Hide" onPress={() => void update($, isHidden, () => true)} />
         </Box>
         {s.issue && (
           <Box flexDirection="row" alignItems="center" gap={1} marginBottom={1}>

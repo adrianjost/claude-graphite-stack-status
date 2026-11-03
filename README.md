@@ -43,7 +43,7 @@ Answer `y` to add the marketplace, then pick a scope.
 The band appears on its own whenever the session's branch belongs to a Graphite stack.
 
 - `/stack` shows or hides it
-- click the band, then press `R` to refresh or `H` to hide
+- **Refresh** and **Hide** in its header reload it or hide it
 
 ## Review page
 
