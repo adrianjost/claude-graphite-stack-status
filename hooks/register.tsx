@@ -57,15 +57,16 @@ type GqlPr = {
   isDraft: boolean
   reviewDecision: string | null
   labels: { nodes: { name: string; color: string; description: string | null }[] }
-  reviewRequests: { totalCount: number }
-  latestReviews: { totalCount: number }
+  reviewRequests: { totalCount: number; nodes: { requestedReviewer: { login?: string; name?: string } | null }[] }
+  latestReviews: { totalCount: number; nodes: { state: string; author: { login: string } | null }[] }
   reviewThreads: { nodes: { isResolved: boolean }[] }
   commits: { nodes: { commit: { statusCheckRollup: { contexts: { nodes: GqlCheck[] } } | null } }[] }
 }
 
 const PR_FIELDS =
   'number title url state isDraft reviewDecision labels(first:20){nodes{name color description}} ' +
-  'reviewRequests{totalCount} latestReviews{totalCount} reviewThreads(first:100){nodes{isResolved}} ' +
+  'reviewRequests(first:20){totalCount nodes{requestedReviewer{... on User{login} ... on Bot{login} ... on Mannequin{login} ... on Team{name}}}} ' +
+  'latestReviews(first:20){totalCount nodes{state author{login}}} reviewThreads(first:100){nodes{isResolved}} ' +
   'commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ' +
   '... on CheckRun{name status conclusion detailsUrl startedAt checkSuite{workflowRun{workflow{name}}}} ' +
   '... on StatusContext{context state targetUrl}}}}}}}'
@@ -235,6 +236,13 @@ function toPrInfo(pr: GqlPr): PrInfo {
     failing,
     openThreads: pr.reviewThreads.nodes.filter(t => !t.isResolved).length,
     hasReviewers: pr.reviewRequests.totalCount + pr.latestReviews.totalCount > 0,
+    reviewers: [
+      ...pr.latestReviews.nodes.flatMap(r => (r.author ? [{ name: r.author.login, state: r.state }] : [])),
+      ...pr.reviewRequests.nodes.flatMap(r => {
+        const name = r.requestedReviewer?.login ?? r.requestedReviewer?.name
+        return name ? [{ name, state: 'REQUESTED' }] : []
+      }),
+    ].filter((r, i, all) => all.findIndex(o => o.name === r.name) === i),
   }
 }
 
@@ -561,6 +569,9 @@ async function pushReview($: Engine) {
         graphiteUrl: graphiteUrl(row.pr),
         state: row.pr.state,
         isDraft: row.pr.isDraft,
+        reviewDecision: row.pr.reviewDecision,
+        labels: row.pr.labels,
+        reviewers: row.pr.reviewers ?? [],
       },
     })),
   }

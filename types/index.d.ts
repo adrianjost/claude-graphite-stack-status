@@ -22,6 +22,7 @@ export type PrInfo = {
   failing: { name: string; workflow?: string; url?: string }[]
   openThreads: number
   hasReviewers: boolean
+  reviewers?: { name: string; state: string }[]
 }
 
 export type Lane = {

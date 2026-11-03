@@ -43,13 +43,13 @@ const store = (key, value) => {
 }
 
 const prefs = {
-  format: stored('format', 'unified'),
+  format: stored('format', 'split'),
   whitespace: stored('whitespace', false),
   compare: stored('compare', 'parent'),
   showSent: stored('showSent', true),
   uncommitted: { true: 'all', false: 'committed' }[stored('uncommitted', 'all')] ?? stored('uncommitted', 'all'),
 }
-if (prefs.format !== 'unified' && prefs.format !== 'split') prefs.format = 'unified'
+if (prefs.format !== 'unified' && prefs.format !== 'split') prefs.format = 'split'
 
 let state = { version: -1, rows: [] }
 let selected = decodeURIComponent(location.hash.replace(/^#branch=/, '')) || ''
@@ -582,6 +582,49 @@ function renderSidebar() {
     .join('')
 }
 
+const REVIEW_STATES = {
+  APPROVED: ['approved', 'Approved', '✓'],
+  CHANGES_REQUESTED: ['changes', 'Requested changes', '±'],
+  COMMENTED: ['commented', 'Commented', '💬'],
+  DISMISSED: ['dismissed', 'Review dismissed', '–'],
+  PENDING: ['requested', 'Review pending', '…'],
+  REQUESTED: ['requested', 'Review requested', '○'],
+}
+
+function labelInk(color) {
+  const [r, g, b] = [0, 2, 4].map(i => Number.parseInt(color.slice(i, i + 2), 16))
+  return (r * 299 + g * 587 + b * 114) / 1000 > 150 ? '#1f2328' : '#ffffff'
+}
+
+function prInfo(pr) {
+  const status = pr.state === 'MERGED' ? 'merged' : pr.state === 'CLOSED' ? 'closed' : pr.isDraft ? 'draft' : 'open'
+  const reviewers = (pr.reviewers ?? [])
+    .map(r => {
+      const [kind, label, mark] = REVIEW_STATES[r.state] ?? REVIEW_STATES.REQUESTED
+      return `<span class="reviewer ${kind}" title="${esc(`${r.name}: ${label}`)}"><i>${mark}</i>${esc(r.name)}</span>`
+    })
+    .join('')
+  const labels = (pr.labels ?? [])
+    .map(l => {
+      const color = /^[0-9a-f]{6}$/i.test(l.color) ? l.color : '8b949e'
+      return `<span class="label" data-color="${color}" title="${esc(l.description ?? l.name)}">${esc(l.name)}</span>`
+    })
+    .join('')
+  return `<div class="pr-info">
+    <span class="state ${status}">${status[0].toUpperCase()}${status.slice(1)}</span>
+    ${reviewers ? `<span class="reviewers"><span class="muted">Reviewers</span>${reviewers}</span>` : '<span class="muted">No reviewers</span>'}
+    ${labels ? `<span class="labels">${labels}</span>` : ''}
+  </div>`
+}
+
+function paintLabels() {
+  for (const el of document.querySelectorAll('.label[data-color]')) {
+    const color = el.dataset.color
+    el.style.setProperty('--label', `#${color}`)
+    el.style.setProperty('--label-ink', labelInk(color))
+  }
+}
+
 const shortBranch = branch => (branch ?? '').replace(/^[^/]+\//, '')
 
 function updateIdentity() {
@@ -622,6 +665,7 @@ function renderHeader() {
   const pressed = on => `aria-pressed="${on}"`
   const allClosed = files.length > 0 && files.every(isCollapsed)
   $('#header').innerHTML = `
+    ${pr ? prInfo(pr) : ''}
     <h1>${title}</h1>
     <div class="meta">
       ${
@@ -637,8 +681,8 @@ function renderHeader() {
     </div>
     <div class="toolbar">
       <span class="segmented">
-        <button data-format="unified" ${pressed(prefs.format === 'unified')}>Unified</button>
         <button data-format="split" ${pressed(prefs.format === 'split')}>Split</button>
+        <button data-format="unified" ${pressed(prefs.format === 'unified')}>Unified</button>
       </span>
       <span class="segmented"${current?.mode === 'uncommitted' ? ' hidden' : ''}>
         <button data-compare="parent" ${pressed(prefs.compare === 'parent')}>vs parent</button>
@@ -661,6 +705,7 @@ function renderHeader() {
       <button class="btn" data-act="comments" title="All comments">Comments</button>
       <button class="btn primary" data-act="review">Review${pendingCount() ? ` <span class="count">${pendingCount()}</span>` : ''}</button>
     </div>`
+  paintLabels()
   document.documentElement.style.setProperty('--header-height', `${$('#header').offsetHeight}px`)
   updateIdentity()
 }

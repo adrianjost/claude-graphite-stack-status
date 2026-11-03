@@ -50,7 +50,8 @@ The band appears on its own whenever the session's branch belongs to a Graphite 
 **Review stack** in the band's header, or **Review ↗** on a branch's line counts, opens a live review page for the stack in your browser. Keep it open: it follows the session as Claude works, and when it's open those buttons switch it to the branch instead of opening another tab.
 
 - The stack graph on the left switches between branches (or press `[` and `]`).
-- Diffs are GitHub-style: unified or split, with syntax highlighting, highlighted changed words and expandable context. Compare against the parent branch or trunk and hide whitespace.
+- For a branch with a PR, the top shows its state, assigned reviewers with their review status, and its labels.
+- Diffs are GitHub-style: split (default) or unified, with syntax highlighting, highlighted changed words and expandable context. Compare against the parent branch or trunk and hide whitespace.
 - On the checked-out branch, switch between all changes, committed only and uncommitted only. In the combined view, uncommitted lines get an orange dot and their files an **Uncommitted** badge.
 - Generated and very large files are left out until you show them. Mark files as viewed; the mark resets when the file changes.
 - Drag over line numbers (or click one and shift-click another) to leave an inline comment on one or more lines. **Review** lists every pending comment across the stack; **Send to Claude** hands them, grouped by branch, plus an overall note to Claude in the session and confirms once Claude Code picked them up.
