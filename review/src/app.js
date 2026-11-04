@@ -62,14 +62,14 @@ const session = {
 function saveDraft() {
   if (!selected) return
   const summary = $('#summary')?.value ?? ''
-  const draft = { summary, composer, describing }
-  session.set(`draft:${selected}`, summary || composer || describing ? draft : null)
+  const draft = { summary, composers, describing }
+  session.set(`draft:${selected}`, summary || composers.length || describing ? draft : null)
 }
 
 function restoreDraft() {
   const draft = session.get(`draft:${selected}`)
   $('#summary').value = draft?.summary ?? ''
-  composer = draft?.composer ?? null
+  composers = draft?.composers ?? (draft?.composer ? [draft.composer] : [])
   describing = draft?.describing ?? null
 }
 
@@ -92,7 +92,9 @@ let comments = []
 let sent = []
 let jumps = []
 let pendingJump = null
-let composer = null
+let composers = []
+const composerAt = target => composers.find(c => sameTarget(c, target))
+const composerFor = el => composers.find(c => targetKey(c) === el?.closest?.('.composer')?.dataset.box)
 let shownHeavy = new Set()
 let collapsed = new Set()
 let expansions = new Map()
@@ -377,7 +379,7 @@ function lnCell(path, line, number, extra = '', column = 'new') {
   if (number === undefined) return `<td class="ln ${extra}"></td>`
   const target = targetOf(line)
   const commented = comments.some(c => covers(c, path, target))
-  if (covers(composer, path, target)) extra += ' in-range'
+  if (composers.some(c => covers(c, path, target))) extra += ' in-range'
   const isPending = column === 'new' && line.type !== 'del' && pending.get(path)?.has(line.new)
   return `<td class="ln ${extra}${commented ? ' commented' : ''}${isPending ? ' pending' : ''}"${isPending ? ' title="Uncommitted change"' : ''} data-path="${esc(path)}" data-side="${target.side}" data-line="${target.line}">${number}<button class="add-comment" tabindex="-1" title="Comment on this line">+</button></td>`
 }
@@ -394,13 +396,13 @@ function pendingCard(comment, index, note = '') {
     <div class="comment-body">${esc(comment.text)}</div></div>`
 }
 
-function composerBox() {
-  return `<div class="composer">
+function composerBox(composer) {
+  return `<div class="composer" data-box="${esc(targetKey(composer))}">
     <textarea placeholder="Leave a comment for Claude on ${rangeLabel(composer)}…">${esc(composer.text ?? '')}</textarea>
     <div class="actions"><span class="muted hint">⌘↵ to save · Esc to cancel</span>
       <button class="btn" data-act="cancel">Cancel</button>
       <button class="btn" data-act="send-now" title="Send just this comment to Claude now, without the rest of the review">Send to Claude now</button>
-      <button class="btn primary" data-act="save">${composer.text ? 'Update comment' : 'Add comment'}</button></div>
+      <button class="btn primary" data-act="save">${composer.existing ? 'Update comment' : 'Add comment'}</button></div>
     </div>`
 }
 
@@ -408,14 +410,14 @@ function strandedComments(path, isRendered) {
   const stranded = comments
     .map((comment, index) => ({ comment, index }))
     .filter(({ comment }) => !comment.kind && comment.path === path && !isRendered(comment))
-  const composerStranded = composer && composer.path === path && !isRendered(composer)
-  if (!stranded.length && !composerStranded) return ''
+  const composerStranded = composers.filter(c => c.path === path && !isRendered(c))
+  if (!stranded.length && !composerStranded.length) return ''
   let html = `<div class="stranded"><div class="stranded-head">Comments on lines that are no longer in this diff</div>`
   for (const { comment, index } of stranded) {
-    if (composer && sameTarget(composer, comment)) continue
+    if (composerAt(comment)) continue
     html += pendingCard(comment, index)
   }
-  if (composerStranded) html += composerBox()
+  for (const box of composerStranded) html += composerBox(box)
   return `${html}</div>`
 }
 
@@ -431,7 +433,7 @@ function threadRows(path, targets, colspan) {
     const at = { path, ...target }
     renderedTargets.add(targetKey(at))
     for (const comment of comments.filter(c => sameTarget(c, at))) {
-      if (composer && sameTarget(composer, at)) continue
+      if (composerAt(at)) continue
       html += row(pendingCard(comment, comments.indexOf(comment)), target.side)
     }
     if (prefs.showSent) {
@@ -447,7 +449,8 @@ function threadRows(path, targets, colspan) {
         )
       }
     }
-    if (composer && sameTarget(composer, at)) html += row(composerBox(), target.side)
+    const box = composerAt(at)
+    if (box) html += row(composerBox(box), target.side)
   }
   return html
 }
@@ -1103,12 +1106,17 @@ function jumpTo(target) {
 
 function openComposer(target) {
   const existing = comments.find(c => sameTarget(c, target))
-  const previous = composer?.path
   const start = target.start ?? existing?.start ?? target.line
-  composer = { path: target.path, side: target.side, start, line: target.line, text: existing?.text ?? '' }
-  if (previous && previous !== target.path) rerenderFile(previous)
-  rerenderFile(target.path)
-  const area = document.querySelector('.composer textarea')
+  const touched = new Set([target.path])
+  composers = composers.filter(c => {
+    const keep = (c.text ?? '').trim() && !sameTarget(c, target)
+    if (!keep) touched.add(c.path)
+    return keep
+  })
+  const box = { path: target.path, side: target.side, start, line: target.line, text: target.text ?? existing?.text ?? '', existing: !!existing }
+  composers.push(box)
+  touched.forEach(rerenderFile)
+  const area = document.querySelector(`.composer[data-box="${CSS.escape(targetKey(box))}"] textarea`)
   area?.focus()
   area?.setSelectionRange(area.value.length, area.value.length)
   saveDraft()
@@ -1131,15 +1139,15 @@ function codeAt(range) {
   return out.join('\n')
 }
 
-function saveComposer() {
+function saveComposer(composer) {
   if (!composer) return
-  const text = document.querySelector('.composer textarea')?.value.trim() ?? ''
+  const text = document.querySelector(`.composer[data-box="${CSS.escape(targetKey(composer))}"] textarea`)?.value.trim() ?? composer.text?.trim() ?? ''
   const target = { path: composer.path, side: composer.side, line: composer.line }
   const range = composer.start !== composer.line ? { ...target, start: composer.start } : target
   comments = comments.filter(c => !sameTarget(c, target))
   if (text) comments.push({ ...range, text, code: codeAt(range), base: current?.parent })
   comments.sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line)
-  composer = null
+  composers = composers.filter(c => c !== composer)
   persistComments()
   rerenderFile(target.path)
   renderHeader()
@@ -1191,22 +1199,21 @@ async function sendNow(comment, button) {
   return true
 }
 
-async function sendComposerNow(button) {
+async function sendComposerNow(button, composer) {
   if (!composer) return
-  const text = document.querySelector('#diff .composer textarea')?.value.trim() ?? ''
+  const text = button.closest('.composer')?.querySelector('textarea')?.value.trim() ?? ''
   if (!text) return
   const target = { path: composer.path, side: composer.side, line: composer.line }
-  saveComposer()
+  saveComposer(composer)
   const index = comments.findIndex(c => sameTarget(c, target))
   if (index < 0) return
   await sendNow(comments[index], document.querySelector(`[data-send-now="${index}"]`) ?? button)
 }
 
-function closeComposer() {
+function closeComposer(composer) {
   if (!composer) return
-  const path = composer.path
-  composer = null
-  rerenderFile(path)
+  composers = composers.filter(c => c !== composer)
+  rerenderFile(composer.path)
   saveDraft()
 }
 
@@ -1531,10 +1538,13 @@ document.addEventListener('click', event => {
     if (!ln?.dataset.line) ln = ln?.previousElementSibling
     if (ln?.dataset.line) {
       const at = cellTarget(ln)
-      const extend = event.shiftKey && composer && composer.path === at.path && composer.side === at.side
-      const start = extend ? Math.min(composer.start, at.line) : at.line
-      const end = extend ? Math.max(composer.line, at.line) : at.line
-      openComposer({ ...at, start, line: end })
+      const last = composers.at(-1)
+      const extend = event.shiftKey && last && last.path === at.path && last.side === at.side
+      const start = extend ? Math.min(last.start, at.line) : at.line
+      const end = extend ? Math.max(last.line, at.line) : at.line
+      if (extend) composers = composers.filter(c => c !== last)
+      const carry = extend ? last.text : undefined
+      openComposer({ ...at, start, line: end, text: carry })
       return
     }
   }
@@ -1648,13 +1658,13 @@ document.addEventListener('click', event => {
     descriptionOpen = !descriptionOpen
     renderDescription()
   }
-  if (d.act === 'send-now') sendComposerNow(el)
+  if (d.act === 'send-now') sendComposerNow(el, composerFor(el))
   if (d.sendNow !== undefined) {
     const comment = comments[Number(d.sendNow)]
     if (comment) sendNow(comment, el)
   }
-  if (d.act === 'save') saveComposer()
-  if (d.act === 'cancel') closeComposer()
+  if (d.act === 'save') saveComposer(composerFor(el))
+  if (d.act === 'cancel') closeComposer(composerFor(el))
   if (d.act === 'collapse-all') {
     const allClosed = files.every(isCollapsed)
     collapsed = new Set(allClosed ? files.filter(isViewed).map(f => `open:${f.path}`) : files.map(f => f.path))
@@ -1692,8 +1702,10 @@ document.addEventListener('mousedown', event => {
   if (!cell) return
   event.preventDefault()
   const at = cellTarget(cell)
-  const extend = event.shiftKey && composer && composer.path === at.path && composer.side === at.side
-  drag = { path: at.path, side: at.side, start: extend ? composer.start : at.line, end: at.line }
+  const last = composers.at(-1)
+  const extend = event.shiftKey && last && last.path === at.path && last.side === at.side
+  if (extend) composers = composers.filter(c => c !== last)
+  drag = { path: at.path, side: at.side, start: extend ? last.start : at.line, end: at.line, text: extend ? last.text : undefined }
   document.body.classList.add('selecting')
   paintDrag()
 })
@@ -1713,10 +1725,10 @@ document.addEventListener('mouseover', event => {
 
 document.addEventListener('mouseup', () => {
   if (!drag) return
-  const { path, side, start, end } = drag
+  const { path, side, start, end, text } = drag
   drag = null
   document.body.classList.remove('selecting')
-  openComposer({ path, side, start: Math.min(start, end), line: Math.max(start, end) })
+  openComposer({ path, side, start: Math.min(start, end), line: Math.max(start, end), text })
 })
 
 document.addEventListener('change', event => {
@@ -1755,8 +1767,8 @@ document.addEventListener('keydown', event => {
     return
   }
   if (event.target.closest('.composer textarea')) {
-    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) saveComposer()
-    if (event.key === 'Escape') closeComposer()
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) saveComposer(composerFor(event.target))
+    if (event.key === 'Escape') closeComposer(composerFor(event.target))
     return
   }
   if (event.target.closest('textarea, input')) {
@@ -1778,8 +1790,8 @@ document.addEventListener('input', event => {
   if (area.closest?.('#description .composer') && describing) {
     describing.text = area.value
     saveDraft()
-  } else if (area.closest?.('#diff .composer') && composer) {
-    composer.text = area.value
+  } else if (composerFor(area)) {
+    composerFor(area).text = area.value
     saveDraft()
   }
   if (event.target.closest('#picker input') && picker) searchPicker(event.target.value.trim())
@@ -1807,7 +1819,7 @@ async function poll() {
         if (fallback) select(fallback.branch)
       }
       renderStack()
-      if (!composer || !renderedKey) loadDiff(restarted)
+      if (!composers.length || !renderedKey) loadDiff(restarted)
     } catch {
       $('#connection').className = 'connection offline'
       $('#connection').title = 'Disconnected: waiting for Claude Code'
