@@ -399,7 +399,7 @@ function pendingCard(comment, index, note = '') {
 function composerBox(composer) {
   return `<div class="composer" data-box="${esc(targetKey(composer))}">
     <textarea placeholder="Leave a comment for Claude on ${rangeLabel(composer)}…">${esc(composer.text ?? '')}</textarea>
-    <div class="actions"><span class="muted hint">⌘↵ to save · Esc to cancel</span>
+    <div class="actions">${composer.side === 'new' ? '<button class="btn invisible" data-act="suggest" title="Suggest a replacement for the selected lines">± Suggest change</button>' : ''}<span class="muted hint">⌘↵ to save · Esc to cancel</span>
       <button class="btn" data-act="cancel">Cancel</button>
       <button class="btn" data-act="send-now" title="Send just this comment to Claude now, without the rest of the review">Send to Claude now</button>
       <button class="btn primary" data-act="save">${composer.existing ? 'Update comment' : 'Add comment'}</button></div>
@@ -1210,6 +1210,16 @@ async function sendComposerNow(button, composer) {
   await sendNow(comments[index], document.querySelector(`[data-send-now="${index}"]`) ?? button)
 }
 
+function insertSuggestion(composer, area) {
+  if (!composer || !area) return
+  const before = area.value.slice(0, area.selectionStart)
+  const block = `${before && !before.endsWith('\n') ? '\n' : ''}\`\`\`suggestion\n${codeAt(composer)}\n\`\`\`\n`
+  area.setRangeText(block, area.selectionStart, area.selectionEnd, 'end')
+  area.focus()
+  composer.text = area.value
+  saveDraft()
+}
+
 function closeComposer(composer) {
   if (!composer) return
   composers = composers.filter(c => c !== composer)
@@ -1665,6 +1675,7 @@ document.addEventListener('click', event => {
   }
   if (d.act === 'save') saveComposer(composerFor(el))
   if (d.act === 'cancel') closeComposer(composerFor(el))
+  if (d.act === 'suggest') insertSuggestion(composerFor(el), el.closest('.composer')?.querySelector('textarea'))
   if (d.act === 'collapse-all') {
     const allClosed = files.every(isCollapsed)
     collapsed = new Set(allClosed ? files.filter(isViewed).map(f => `open:${f.path}`) : files.map(f => f.path))

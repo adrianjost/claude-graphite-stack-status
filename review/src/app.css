@@ -755,6 +755,7 @@ tr.thread td {
 .composer .actions,
 #submit .actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
   padding: 8px;
