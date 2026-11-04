@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface as Engine, Register, Timer } from 'claude-code'
 
-import type { CiState, Issue, Lane, LinkTarget, PrInfo, StackRow, StackSnapshot } from '../types'
+import type { CiState, Issue, Lane, LinkTarget, PrInfo, StackRow, StackSnapshot, WaitingPrompt } from '../types'
 
 const POLL_MS = 60_000
 const POLL_BUSY_MS = 30_000
@@ -17,7 +17,7 @@ const isHidden = atom({ plugin: 'graphite-stack', key: 'isHidden' } as const, fa
 const linkTarget = atom({ plugin: 'graphite-stack', key: 'linkTarget' } as const, 'github' as LinkTarget)
 const working = atom({ plugin: 'graphite-stack', key: 'working' } as const, null as string | null)
 const reviewUrl = atom({ plugin: 'graphite-stack', key: 'reviewUrl' } as const, null as string | null)
-const waitingPrompts = atom({ plugin: 'graphite-stack', key: 'waitingPrompts' } as const, [] as string[])
+const waitingPrompts = atom({ plugin: 'graphite-stack', key: 'waitingPrompts' } as const, [] as WaitingPrompt[])
 const REVIEW_PORT_BASE = 47100
 const REVIEW_PORTS = 1800
 const STACK_ACTION_TIMEOUT_MS = 3 * 60_000
@@ -722,9 +722,8 @@ function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
       ? `\nOn the ${pr ? 'PR description' : 'commit message (the future PR description)'}:\n${notes.map((c, i) => `${i + 1}. ${c.text}${quoteLines(c.quote)}`).join('\n')}`
       : '',
     comments.length ? `\n${notes.length ? 'On the code:\n' : ''}${comments.map((c, i) => `${i + 1}. ${where(c)}: ${c.text}${quoteLines(c.code)}`).join('\n')}` : '',
-    `\nAddress each point on its branch.` +
-      (notes.length && pr ? ' Apply the description points by editing the PR description on GitHub, changing only what they ask for.' : '') +
-      (notes.length && !pr ? " Apply the description points to the branch's commit message, which becomes the PR title and description." : ''),
+    notes.length && pr ? '\nApply the description points by editing the PR description on GitHub, changing only what they ask for.' : '',
+    notes.length && !pr ? "\nApply the description points to the branch's commit message, which becomes the PR title and description." : '',
   ]
     .filter(Boolean)
     .join('\n')
@@ -738,21 +737,22 @@ function submitPrompt($: Engine, text: string) {
     .catch(error => $.ui.toast(`Couldn't hand this to Claude: ${String(error)}`, { timeoutMs: 10_000 }))
 }
 
-async function queuePrompt($: Engine, text: string) {
-  if (turnRunning) await update($, waitingPrompts, list => [...list, text])
+async function queuePrompt($: Engine, text: string, branch?: string) {
+  if (turnRunning) await update($, waitingPrompts, list => [...list, { text, branch }])
   else submitPrompt($, text)
 }
 
 async function flushPrompts($: Engine) {
-  const batch = await read($, waitingPrompts)
+  const batch = (await read($, waitingPrompts)).map(entry => (typeof entry === 'string' ? { text: entry } : entry))
   if (!batch.length) return
   await update($, waitingPrompts, () => [])
+  const branches = new Set(batch.flatMap(entry => (entry.branch ? [entry.branch] : [])))
   submitPrompt(
     $,
     batch.length === 1
-      ? batch[0]!
-      : `${batch.length} requests from the review page came in while you were busy. Handle them in order:\n\n` +
-          batch.map((text, i) => `## ${i + 1}.\n\n${text}`).join('\n\n'),
+      ? batch[0]!.text
+      : `${batch.length} requests from the review page came in while you were busy. Handle them in order${branches.size > 1 ? ', addressing each review point on its branch' : ''}:\n\n` +
+          batch.map((entry, i) => `## ${i + 1}.\n\n${entry.text}`).join('\n\n'),
   )
 }
 
@@ -802,7 +802,7 @@ async function pollReviewActions($: Engine, port: number) {
         requestRefresh($, 'force')
       }
       if (!handled.has(action.id) && action.type === 'review' && (action.comments.length || action.summary)) {
-        await queuePrompt($, reviewPrompt(action, (await read($, snapshot)).rows))
+        await queuePrompt($, reviewPrompt(action, (await read($, snapshot)).rows), action.branch)
         results[action.id] = { ok: true, data: { queued: turnRunning } }
       }
       handled.add(action.id)

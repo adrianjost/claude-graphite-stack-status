@@ -1,5 +1,7 @@
 export type LinkTarget = 'github' | 'graphite'
 
+export type WaitingPrompt = string | { text: string; branch?: string }
+
 export type Issue = {
   message: string
   detail?: string
@@ -62,6 +64,6 @@ export type StackSnapshot = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'graphite-stack': { snapshot: StackSnapshot; isHidden: boolean; linkTarget: LinkTarget; working: string | null; reviewUrl: string | null; waitingPrompts: string[] }
+    'graphite-stack': { snapshot: StackSnapshot; isHidden: boolean; linkTarget: LinkTarget; working: string | null; reviewUrl: string | null; waitingPrompts: WaitingPrompt[] }
   }
 }
