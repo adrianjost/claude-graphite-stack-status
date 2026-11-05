@@ -748,6 +748,7 @@ async function pushReview($: Engine) {
 type ReviewComment = {
   kind?: 'description' | 'thread'
   thread?: { id: string; url: string }
+  note?: string
   quote?: string
   id?: string | number
   branch?: string
@@ -909,7 +910,7 @@ function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
   }
   if (single?.thread) {
     const { id, url } = single.thread
-    return { refs, text: `GitHub review thread on ${subject}, ${where(single)} (${url}, thread id \`${id}\`):\n\n${single.text}${quoteLines(single.code)}\n\nPlease ${THREAD_TAIL.replace('<thread id>', id)}` }
+    return { refs, text: `GitHub review thread on ${subject}, ${where(single)} (${url}, thread id \`${id}\`):\n\n${single.text}${single.note ? `\nGuidance: ${single.note}` : ''}${quoteLines(single.code)}\n\nPlease ${THREAD_TAIL.replace('<thread id>', id)}` }
   }
   if (single) {
     const target = single.kind === 'description' ? (pr ? 'the PR description' : 'the commit message') : where(single)
@@ -935,7 +936,7 @@ function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
       ? `\n${notes.length ? 'On the code:\n' : ''}${comments
           .map((c, i) =>
             c.thread
-              ? `${mark(c, i)}${where(c)}: GitHub review thread ${c.thread.url} (thread id \`${c.thread.id}\`)\n   ${indent(c.text)}${quoteLines(c.code)}`
+              ? `${mark(c, i)}${where(c)}: GitHub review thread ${c.thread.url} (thread id \`${c.thread.id}\`)\n   ${indent(c.text)}${c.note ? `\n   Guidance: ${indent(c.note)}` : ''}${quoteLines(c.code)}`
               : `${mark(c, i)}${where(c)}: ${c.text}${quoteLines(c.code)}`,
           )
           .join('\n')}`

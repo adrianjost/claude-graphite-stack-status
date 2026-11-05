@@ -62,8 +62,8 @@ const session = {
 function saveDraft() {
   if (!selected) return
   const summary = $('#summary')?.value ?? ''
-  const draft = { summary, composers, describing }
-  session.set(`draft:${selected}`, summary || composers.length || describing ? draft : null)
+  const draft = { summary, composers, describing, threadNotes }
+  session.set(`draft:${selected}`, summary || composers.length || describing || threadNotes.length ? draft : null)
 }
 
 function restoreDraft() {
@@ -71,6 +71,7 @@ function restoreDraft() {
   $('#summary').value = draft?.summary ?? ''
   composers = draft?.composers ?? (draft?.composer ? [draft.composer] : [])
   describing = draft?.describing ?? null
+  threadNotes = draft?.threadNotes ?? []
 }
 
 const prefs = {
@@ -92,6 +93,8 @@ let sent = []
 let jumps = []
 let pendingJump = null
 let composers = []
+let threadNotes = []
+const noteAt = id => threadNotes.find(n => n.id === id)
 const composerAt = target => composers.find(c => sameTarget(c, target))
 const composerFor = el => composers.find(c => targetKey(c) === el?.closest?.('.composer')?.dataset.box)
 let shownHeavy = new Set()
@@ -528,7 +531,7 @@ function threadCard(thread) {
     ? `<button class="btn invisible" data-thread-act="toggle" ${id}>${shown ? 'Hide' : 'Show'}</button>` +
       (thread.canToggle ? `<button class="btn invisible" data-thread-act="resolve" ${id}>Unresolve</button>` : '')
     : (inReview
-        ? `<button class="btn invisible" data-thread-act="remove" ${id} title="Take this thread out of the pending review">Remove from review</button>`
+        ? `<button class="btn invisible" data-thread-act="remove" ${id} title="Take this thread out of the pending review">Remove from review</button><button class="btn invisible" data-thread-act="add" ${id}>Edit note</button>`
         : `<button class="btn invisible" data-thread-act="add" ${id} title="Add this thread to the pending review">Add to review</button>`) +
       `<button class="btn invisible" data-thread-act="fix" ${id} title="Send just this thread to Claude to fix and resolve now">Fix now</button>` +
       (thread.canToggle ? `<button class="btn invisible" data-thread-act="resolve" ${id}>Resolve</button>` : '')
@@ -547,8 +550,23 @@ function threadCard(thread) {
       inReview ? '<span class="badge pending">In review</span>' : ''
     }<span>${esc(timeAgo(Date.parse(first?.createdAt)))}</span><span>on ${rangeLabel({ start: thread.start, line: threadLine(thread) })}</span><span class="spacer"></span>${buttons}</div>
     ${shown ? `<div class="gh-thread">${replies}</div>` : ''}
+    ${noteBox(thread, inReview)}
     ${answered ? answerBlock(answered) : ''}
     ${error ? `<div class="thread-error">${esc(error)}</div>` : ''}</div>`
+}
+
+function noteBox(thread, inReview) {
+  const note = noteAt(thread.id)
+  const saved = comments.find(c => c.thread?.id === thread.id)?.note
+  if (!note) return saved && !thread.resolved ? `<div class="comment-body"><strong>You:</strong> ${esc(saved)}</div>` : ''
+  const id = `data-thread="${esc(thread.id)}"`
+  return `<div class="composer thread-note" ${id}>
+    <textarea placeholder="Add guidance for Claude (optional)…">${esc(note.text)}</textarea>
+    <div class="actions"><span class="muted hint">⌘↵ to add · Esc to cancel</span>
+      <button class="btn" data-thread-act="note-cancel" ${id}>Cancel</button>
+      <button class="btn" data-thread-act="note-fix" ${id} title="Send just this thread to Claude to fix and resolve now">Fix now</button>
+      <button class="btn primary" data-thread-act="note-add" ${id}>${inReview ? 'Update' : 'Add to review'}</button></div>
+    </div>`
 }
 
 function strandedThreads(path, isRendered, openOnly = false) {
@@ -1194,7 +1212,7 @@ function commentItems(list, kind) {
               ? `${answerBadge(comment)}<span class="muted">${esc(timeAgo(comment.sentAt))}</span>`
               : `<button class="btn invisible delete-item" data-remove-at="${jumps.length - 1}" title="Delete this comment">Delete</button>`
           }</div>
-        <div class="text">${esc(comment.text)}</div></div>`
+        <div class="text">${esc(comment.text)}</div>${comment.note ? `<div class="text"><strong>You:</strong> ${esc(comment.note)}</div>` : ''}</div>`
     }
   }
   return html
@@ -1362,12 +1380,13 @@ async function sendComposerNow(button, composer) {
   await sendNow(comments[index], document.querySelector(`[data-send-now="${index}"]`) ?? button)
 }
 
-function threadComment(thread) {
+function threadComment(thread, note = '') {
   const range = { path: thread.path, side: thread.side, ...(thread.start ? { start: thread.start } : {}), line: threadLine(thread) }
   return {
     kind: 'thread',
     ...range,
     text: thread.comments.map(c => `@${c.author}: ${c.body.trim().slice(0, 2000)}`).join('\n\n'),
+    ...(note ? { note } : {}),
     code: thread.outdated ? '' : codeAt(range),
     base: current?.parent,
     thread: { id: thread.id, url: thread.comments[0]?.url ?? '' },
@@ -1380,8 +1399,8 @@ function refreshThread(thread) {
   renderCommentViews()
 }
 
-async function fixThread(thread, button) {
-  const comment = threadComment(thread)
+async function fixThread(thread, button, note = '') {
+  const comment = threadComment(thread, note)
   button.disabled = true
   button.textContent = 'Sending…'
   const result = await deliver([comment]).catch(() => null)
@@ -1392,7 +1411,9 @@ async function fixThread(thread, button) {
     return
   }
   comments = comments.filter(c => c.thread?.id !== thread.id)
+  threadNotes = threadNotes.filter(n => n.id !== thread.id)
   persistComments()
+  saveDraft()
   sent = [...sent, { ...comment, sentAt: Date.now() }]
   store(`sent:${selected}`, sent)
   refreshThread(thread)
@@ -1420,17 +1441,34 @@ function threadAct(button) {
     if (!openResolved.delete(thread.id)) openResolved.add(thread.id)
     refreshThread(thread)
   }
-  if (act === 'add') {
-    comments = [...comments.filter(c => c.thread?.id !== thread.id), threadComment(thread)].sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line)
+  if (act === 'add' || act === 'fix') {
+    if (!noteAt(thread.id)) threadNotes.push({ id: thread.id, path: thread.path, text: comments.find(c => c.thread?.id === thread.id)?.note ?? '' })
+    refreshThread(thread)
+    saveDraft()
+    const area = document.querySelector(`.thread-note[data-thread="${CSS.escape(thread.id)}"] textarea`)
+    area?.focus()
+    area?.setSelectionRange(area.value.length, area.value.length)
+    return
+  }
+  if (act === 'note-add') {
+    const note = noteAt(thread.id)?.text.trim() ?? ''
+    comments = [...comments.filter(c => c.thread?.id !== thread.id), threadComment(thread, note)].sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line)
+    threadNotes = threadNotes.filter(n => n.id !== thread.id)
     persistComments()
     refreshThread(thread)
+    saveDraft()
   }
+  if (act === 'note-cancel') {
+    threadNotes = threadNotes.filter(n => n.id !== thread.id)
+    refreshThread(thread)
+    saveDraft()
+  }
+  if (act === 'note-fix') fixThread(thread, button, noteAt(thread.id)?.text.trim() ?? '')
   if (act === 'remove') {
     comments = comments.filter(c => c.thread?.id !== thread.id)
     persistComments()
     refreshThread(thread)
   }
-  if (act === 'fix') fixThread(thread, button)
   if (act === 'resolve') resolveThread(thread, button)
 }
 
@@ -2004,6 +2042,13 @@ document.addEventListener('keydown', event => {
     }
     return
   }
+  const noteArea = event.target.closest('.thread-note textarea')
+  if (noteArea) {
+    const id = noteArea.closest('.thread-note').dataset.thread
+    const act = event.key === 'Escape' ? 'note-cancel' : event.key === 'Enter' && (event.metaKey || event.ctrlKey) ? 'note-add' : ''
+    if (act) threadAct({ dataset: { thread: id, threadAct: act } })
+    return
+  }
   if (event.target.closest('.composer textarea')) {
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) saveComposer(composerFor(event.target))
     if (event.key === 'Escape') closeComposer(composerFor(event.target))
@@ -2025,7 +2070,11 @@ document.addEventListener('keydown', event => {
 document.addEventListener('input', event => {
   const area = event.target
   if (area.id === 'summary') saveDraft()
-  if (area.closest?.('#description .composer') && describing) {
+  if (area.closest?.('.thread-note')) {
+    const note = noteAt(area.closest('.thread-note').dataset.thread)
+    if (note) note.text = area.value
+    saveDraft()
+  } else if (area.closest?.('#description .composer') && describing) {
     describing.text = area.value
     saveDraft()
   } else if (composerFor(area)) {
@@ -2053,9 +2102,9 @@ async function poll() {
         if (fallback) select(fallback.branch)
       }
       renderStack()
-      if (applyReplies() && renderedKey) composers.length ? renderCommentViews() : renderAll()
+      if (applyReplies() && renderedKey) composers.length || threadNotes.length ? renderCommentViews() : renderAll()
       const threadsChanged = JSON.stringify(selectedRow()?.pr?.threads) !== threadsWere
-      if (!composers.length || !renderedKey) loadDiff(restarted).then(() => threadsChanged && !restarted && renderAll())
+      if (!(composers.length || threadNotes.length) || !renderedKey) loadDiff(restarted).then(() => threadsChanged && !restarted && renderAll())
     } catch {
       $('#connection').className = 'connection offline'
       $('#connection').title = 'Disconnected: waiting for Claude Code'
