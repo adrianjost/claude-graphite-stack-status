@@ -10,7 +10,7 @@ const QUIET_AFTER_MS = 10 * 60_000
 const MIN_GAP_MS = 15_000
 const LOCAL_DELAY_MS = 1_500
 const SHARED_CACHE_MS = 55_000
-const GITHUB_COMMAND = /\b(git\s+push|gt\s+(submit|ss|sync|merge|get|land|repo\s+sync)|gh\s+pr)\b/
+const GITHUB_COMMAND = /\b(git\s+push|gt\s+(submit|ss|sync|merge|get|land|repo\s+sync)|gh\s+pr)\b|\bgh\s+api\b[\s\S]*\b(un)?resolveReviewThread\b/
 const EMPTY: StackSnapshot = { branch: '', rows: [], columns: 1, updatedAt: 0, isLoading: false }
 const snapshot = atom({ plugin: 'graphite-stack', key: 'snapshot' } as const, EMPTY)
 const isHidden = atom({ plugin: 'graphite-stack', key: 'isHidden' } as const, false)
@@ -61,14 +61,14 @@ type GqlPr = {
   labels: { nodes: { name: string; color: string; description: string | null }[] }
   reviewRequests: { totalCount: number; nodes: { requestedReviewer: { login?: string; name?: string } | null }[] }
   latestReviews: { totalCount: number; nodes: { state: string; author: { login: string } | null }[] }
-  reviewThreads: { nodes: { isResolved: boolean }[] }
+  reviewThreads: { nodes: { id: string; isResolved: boolean; isOutdated: boolean; comments: { totalCount: number; nodes: { id: string; updatedAt: string }[] } }[] }
   commits: { nodes: { commit: { statusCheckRollup: { contexts: { nodes: GqlCheck[] } } | null } }[] }
 }
 
 const PR_FIELDS =
   'number title url state isDraft reviewDecision bodyHTML labels(first:20){nodes{name color description}} ' +
   'reviewRequests(first:20){totalCount nodes{requestedReviewer{... on User{login} ... on Bot{login} ... on Mannequin{login} ... on Team{name}}}} ' +
-  'latestReviews(first:20){totalCount nodes{state author{login}}} reviewThreads(first:100){nodes{isResolved}} ' +
+  'latestReviews(first:20){totalCount nodes{state author{login}}} reviewThreads(first:100){nodes{id isResolved isOutdated comments(last:1){totalCount nodes{id updatedAt}}}} ' +
   'commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ' +
   '... on CheckRun{name status conclusion detailsUrl startedAt checkSuite{workflowRun{workflow{name}}}} ' +
   '... on StatusContext{context state targetUrl}}}}}}}'
@@ -208,6 +208,21 @@ async function githubRepo($: Engine, cwd: string) {
   return owner && name ? { owner, name } : undefined
 }
 
+const threadToken = (t: { id: string; resolved: boolean; outdated: boolean; key: string }) =>
+  `${t.id}:${t.resolved ? 1 : 0}${t.outdated ? 1 : 0}:${t.key}`
+
+const commentKey = (c: { totalCount: number; nodes: { id: string; updatedAt: string }[] }) => {
+  const last = c.nodes.at(-1)
+  return `${c.totalCount}:${last?.id ?? ''}:${last?.updatedAt ?? ''}`
+}
+
+function fingerprint(tokens: string[]) {
+  if (!tokens.length) return ''
+  let h = 5381
+  for (const ch of tokens.join('|')) h = (Math.imul(h, 33) + ch.charCodeAt(0)) | 0
+  return `${tokens.length}.${(h >>> 0).toString(36)}`
+}
+
 function toPrInfo(pr: GqlPr): PrInfo {
   const checks: GhCheck[] = (pr.commits.nodes[0]?.commit.statusCheckRollup?.contexts.nodes ?? []).map(check => ({
     ...check,
@@ -237,6 +252,9 @@ function toPrInfo(pr: GqlPr): PrInfo {
     ciCounts,
     failing,
     openThreads: pr.reviewThreads.nodes.filter(t => !t.isResolved).length,
+    threadFp: fingerprint(
+      pr.reviewThreads.nodes.map(t => threadToken({ id: t.id, resolved: t.isResolved, outdated: t.isOutdated, key: commentKey(t.comments) })),
+    ),
     hasReviewers: pr.reviewRequests.totalCount + pr.latestReviews.totalCount > 0,
     bodyHtml: pr.bodyHTML,
     reviewers: [
@@ -283,6 +301,132 @@ async function loadPrs($: Engine, cwd: string, branches: string[], force: boolea
   })
   await $.store.set(cacheKey, fresh)
   return prs
+}
+
+type ThreadComment = { author: string; avatar: string; body: string; bodyHtml: string; createdAt: string; url: string }
+type ReviewThread = {
+  id: string
+  resolved: boolean
+  outdated: boolean
+  canToggle: boolean
+  path: string
+  line?: number
+  start?: number
+  originalLine?: number
+  side: 'old' | 'new'
+  key: string
+  comments: ThreadComment[]
+}
+type ThreadCache = Record<string, { at: number; fp: string; threads: ReviewThread[] }>
+type GqlThread = {
+  id: string
+  isResolved: boolean
+  isOutdated: boolean
+  viewerCanResolve: boolean
+  viewerCanUnresolve: boolean
+  path: string
+  line: number | null
+  startLine: number | null
+  originalLine: number | null
+  diffSide: string
+  comments: {
+    totalCount: number
+    nodes: { id: string; updatedAt: string; createdAt: string; url: string; body: string; bodyHTML: string; author: { login: string; avatarUrl: string } | null }[]
+  }
+}
+
+const THREAD_FIELDS =
+  'reviewThreads(first:100){nodes{id isResolved isOutdated viewerCanResolve viewerCanUnresolve path line startLine originalLine diffSide ' +
+  'comments(last:50){totalCount nodes{id updatedAt createdAt url body bodyHTML author{login avatarUrl(size:40)}}}}}'
+const THREAD_CACHE_MS = 7 * 24 * 60 * 60_000
+let threadCache: { key: string; cache: ThreadCache } | undefined
+let syncingThreads = false
+let resyncThreads = false
+
+async function threadStore($: Engine) {
+  if (threadCache) return threadCache
+  const repo = await githubRepo($, await $.session.cwd())
+  if (!repo) return undefined
+  const key = `threads:${repo.owner}/${repo.name}`
+  threadCache = { key, cache: ((await $.store.get(key)) ?? {}) as ThreadCache }
+  return threadCache
+}
+
+const saveThreads = ($: Engine, store: { key: string; cache: ThreadCache }) => {
+  const now = Date.now()
+  for (const [number, entry] of Object.entries(store.cache)) if (now - entry.at > THREAD_CACHE_MS) delete store.cache[number]
+  return $.store.set(store.key, store.cache)
+}
+
+const threadsFp = (threads: ReviewThread[]) => fingerprint(threads.map(threadToken))
+
+function toThread(t: GqlThread): ReviewThread {
+  return {
+    id: t.id,
+    resolved: t.isResolved,
+    outdated: t.isOutdated,
+    canToggle: t.isResolved ? t.viewerCanUnresolve : t.viewerCanResolve,
+    path: t.path,
+    line: t.line ?? undefined,
+    start: t.startLine && t.line && t.startLine !== t.line ? t.startLine : undefined,
+    originalLine: t.originalLine ?? undefined,
+    side: t.diffSide === 'LEFT' ? 'old' : 'new',
+    key: commentKey(t.comments),
+    comments: t.comments.nodes.map(c => ({
+      author: c.author?.login ?? 'ghost',
+      avatar: c.author?.avatarUrl ?? '',
+      body: c.body,
+      bodyHtml: c.bodyHTML,
+      createdAt: c.createdAt,
+      url: c.url,
+    })),
+  }
+}
+
+async function fetchThreads($: Engine) {
+  const cwd = await $.session.cwd()
+  const repo = await githubRepo($, cwd)
+  const store = await threadStore($)
+  if (!repo || !store) return
+  const prs = (await read($, snapshot)).rows.flatMap(row => (row.pr?.state === 'OPEN' && row.pr.threadFp !== undefined ? [row.pr] : []))
+  const now = Date.now()
+  const changed = prs.filter(pr => (store.cache[pr.number]?.fp ?? '') !== pr.threadFp)
+  if (!changed.length) return
+  for (const pr of changed.filter(pr => !pr.threadFp)) store.cache[pr.number] = { at: now, fp: '', threads: [] }
+  const stale = changed.filter(pr => pr.threadFp)
+  if (stale.length) {
+    const fields = stale.map(pr => `p${pr.number}:pullRequest(number:${pr.number}){${THREAD_FIELDS}}`)
+    const query = `query{repository(owner:${JSON.stringify(repo.owner)},name:${JSON.stringify(repo.name)}){${fields.join(' ')}}}`
+    const result = await exec($, cwd, ['gh', 'api', 'graphql', '-f', `query=${query}`])
+    if (result.exitCode !== 0) throw new GitHubError(result.stderr.trim())
+    const found = (JSON.parse(result.stdout) as { data?: { repository?: Record<string, { reviewThreads: { nodes: GqlThread[] } } | null> } }).data?.repository
+    if (!found) throw new GitHubError('unexpected GitHub response')
+    for (const pr of stale) {
+      const nodes = found[`p${pr.number}`]?.reviewThreads.nodes
+      if (nodes) store.cache[pr.number] = { at: now, fp: pr.threadFp ?? '', threads: nodes.map(toThread) }
+    }
+  }
+  await saveThreads($, store)
+  schedulePushReview($)
+}
+
+async function syncThreads($: Engine) {
+  if (!review) return
+  if (syncingThreads) {
+    resyncThreads = true
+    return
+  }
+  syncingThreads = true
+  try {
+    do {
+      resyncThreads = false
+      await fetchThreads($)
+    } while (resyncThreads)
+  } catch (error) {
+    $.ui.log(`review threads failed: ${String(error)}`, { to: 'debug' })
+  } finally {
+    syncingThreads = false
+  }
 }
 
 const GENERATED =
@@ -483,8 +627,6 @@ async function stackAction($: Engine, branch?: string) {
 let review: { port: number; token: string } | undefined
 let reviewStarting: Promise<void> | undefined
 let reviewPushTimer: Timer | undefined
-let reviewConnected = false
-let reviewFocus: { branch: string; seq: number } | undefined
 
 function portFor(id: string) {
   let h = 0
@@ -536,6 +678,7 @@ function startReview($: Engine) {
     review = { port, token }
     await update($, reviewUrl, () => `http://127.0.0.1:${port}/?t=${token}`)
     await pushReview($)
+    void syncThreads($)
     void pollReviewActions($, port)
   })().finally(() => {
     reviewStarting = undefined
@@ -555,12 +698,12 @@ async function pushReview($: Engine) {
   const s = await read($, snapshot)
   const cwd = await $.session.cwd()
   const behind = new Set(s.rows.filter(row => row.needsRestack).map(row => row.branch))
+  const threads = await threadStore($)
   const payload = {
     repo: cwd.split('/').pop(),
     trunk: s.rows.find(row => row.isTrunk)?.branch,
     current: s.branch,
     generated: GENERATED.source,
-    focus: reviewFocus,
     rows: s.rows.map(row => ({
       branch: row.branch,
       parent: row.parent,
@@ -580,23 +723,24 @@ async function pushReview($: Engine) {
         labels: row.pr.labels,
         reviewers: row.pr.reviewers ?? [],
         bodyHtml: row.pr.bodyHtml ?? '',
+        threads: threads?.cache[row.pr.number]?.threads ?? [],
       },
     })),
   }
   try {
-    const response = await $.http.fetch(`http://127.0.0.1:${server.port}/state?t=${server.token}`, {
+    await $.http.fetch(`http://127.0.0.1:${server.port}/state?t=${server.token}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
     })
-    reviewConnected = response.ok && (JSON.parse(response.text) as { isConnected?: boolean }).isConnected === true
   } catch (error) {
     $.ui.log(`review page update failed: ${String(error)}`, { to: 'debug' })
   }
 }
 
 type ReviewComment = {
-  kind?: 'description'
+  kind?: 'description' | 'thread'
+  thread?: { id: string; url: string }
   quote?: string
   branch?: string
   base?: string
@@ -611,7 +755,8 @@ type PrReadyAction = { type: 'pr-ready'; number: number; ready: boolean }
 type ReviewersLoadAction = { type: 'reviewers-load'; number: number; query?: string }
 type ReviewersSetAction = { type: 'reviewers-set'; number: number; add: string[]; remove: string[] }
 type SubmitBranchAction = { type: 'submit-branch'; branch: string }
-type PageAction = ReviewAction | PrReadyAction | ReviewersLoadAction | ReviewersSetAction | SubmitBranchAction
+type ThreadResolveAction = { type: 'thread-resolve'; threadId: string; resolve: boolean; branch?: string }
+type PageAction = ReviewAction | PrReadyAction | ReviewersLoadAction | ReviewersSetAction | SubmitBranchAction | ThreadResolveAction
 type ActionResult = { ok: boolean; message?: string; data?: unknown }
 
 const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/
@@ -665,6 +810,35 @@ async function setReviewers($: Engine, action: ReviewersSetAction): Promise<Acti
   requestRefresh($, 'force')
   return result.exitCode === 0 ? { ok: true } : { ok: false, message: (result.stderr || result.stdout).trim().split('\n')[0] }
 }
+async function setThreadResolved($: Engine, action: ThreadResolveAction): Promise<ActionResult> {
+  const store = await threadStore($)
+  const entry = Object.entries(store?.cache ?? {}).find(([, e]) => e.threads.some(t => t.id === action.threadId))
+  const thread = entry?.[1].threads.find(t => t.id === action.threadId)
+  if (!store || !entry || !thread) return { ok: false, message: 'Unknown review thread. Wait for the page to refresh.' }
+  const mutation = action.resolve ? 'resolveReviewThread' : 'unresolveReviewThread'
+  const cwd = await $.session.cwd()
+  const result = await exec($, cwd, [
+    'gh', 'api', 'graphql', '-f', `query=mutation{${mutation}(input:{threadId:${JSON.stringify(thread.id)}}){thread{isResolved}}}`,
+  ])
+  if (result.exitCode !== 0) return { ok: false, message: (result.stderr || result.stdout).trim().split('\n')[0] }
+  thread.resolved = action.resolve
+  entry[1].fp = threadsFp(entry[1].threads)
+  entry[1].at = Date.now()
+  const number = Number(entry[0])
+  const openThreads = entry[1].threads.filter(t => !t.resolved).length
+  const patch = <T extends PrInfo | null | undefined>(pr: T): T => (pr?.number === number ? { ...pr, openThreads, threadFp: entry[1].fp } : pr)
+  await update($, snapshot, s => ({ ...s, rows: s.rows.map(row => (row.pr ? { ...row, pr: patch(row.pr) } : row)) }))
+  const repo = await githubRepo($, cwd)
+  const shared = repo ? ((await $.store.get(`prs:${repo.owner}/${repo.name}`)) as SharedCache | undefined) : undefined
+  if (repo && shared) {
+    for (const cached of Object.values(shared)) cached.pr = patch(cached.pr)
+    await $.store.set(`prs:${repo.owner}/${repo.name}`, shared)
+  }
+  await saveThreads($, store)
+  schedulePushReview($)
+  return { ok: true }
+}
+
 type ReviewAction = {
   type: 'review'
   branch: string
@@ -691,6 +865,13 @@ function quoteLines(code?: string) {
   return `\n${shown.map(line => `   > ${line}`).join('\n')}`
 }
 
+const RESOLVE_THREAD = `gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:"<thread id>"}){thread{isResolved}}}'`
+const THREAD_TAIL = `fix it on that branch, then resolve the thread with \`${RESOLVE_THREAD}\`. Reply on the thread instead only if you chose not to change any code.`
+
+function indent(text: string) {
+  return text.split('\n').map(line => `   ${line}`).join('\n').trim()
+}
+
 function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
   const where = (c: ReviewComment) =>
     `\`${c.path}:${c.start && c.start !== c.line ? `${c.start}-${c.line}` : c.line}\`` +
@@ -701,6 +882,10 @@ function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
   const pr = stackOrder(rows).find(row => row.branch === action.branch)?.pr
   const subject = layerLabel(rows, action.branch)
   const single = mine.length === 1 && !action.summary ? mine[0] : undefined
+  if (single?.thread) {
+    const { id, url } = single.thread
+    return `GitHub review thread on ${subject}, ${where(single)} (${url}, thread id \`${id}\`):\n\n${single.text}${quoteLines(single.code)}\n\nPlease ${THREAD_TAIL.replace('<thread id>', id)}`
+  }
   if (single) {
     const target = single.kind === 'description' ? (pr ? 'the PR description' : 'the commit message') : where(single)
     const apply =
@@ -721,7 +906,16 @@ function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
     notes.length
       ? `\nOn the ${pr ? 'PR description' : 'commit message (the future PR description)'}:\n${notes.map((c, i) => `${i + 1}. ${c.text}${quoteLines(c.quote)}`).join('\n')}`
       : '',
-    comments.length ? `\n${notes.length ? 'On the code:\n' : ''}${comments.map((c, i) => `${i + 1}. ${where(c)}: ${c.text}${quoteLines(c.code)}`).join('\n')}` : '',
+    comments.length
+      ? `\n${notes.length ? 'On the code:\n' : ''}${comments
+          .map((c, i) =>
+            c.thread
+              ? `${i + 1}. ${where(c)}: GitHub review thread ${c.thread.url} (thread id \`${c.thread.id}\`)\n   ${indent(c.text)}${quoteLines(c.code)}`
+              : `${i + 1}. ${where(c)}: ${c.text}${quoteLines(c.code)}`,
+          )
+          .join('\n')}`
+      : '',
+    comments.some(c => c.thread) ? `\nFor each GitHub review thread, ${THREAD_TAIL}` : '',
     notes.length && pr ? '\nApply the description points by editing the PR description on GitHub, changing only what they ask for.' : '',
     notes.length && !pr ? "\nApply the description points to the branch's commit message, which becomes the PR title and description." : '',
   ]
@@ -794,6 +988,9 @@ async function pollReviewActions($: Engine, port: number) {
       if (!handled.has(action.id) && action.type === 'reviewers-set' && Number.isInteger(action.number)) {
         results[action.id] = await setReviewers($, action).catch(error => ({ ok: false, message: String(error) }))
       }
+      if (!handled.has(action.id) && action.type === 'thread-resolve' && typeof action.threadId === 'string') {
+        results[action.id] = await setThreadResolved($, action).catch(error => ({ ok: false, message: String(error) }))
+      }
       if (!handled.has(action.id) && action.type === 'pr-ready' && Number.isInteger(action.number)) {
         const cwd = await $.session.cwd()
         const argv = ['gh', 'pr', 'ready', String(action.number), ...(action.ready ? [] : ['--undo'])]
@@ -816,29 +1013,11 @@ async function pollReviewActions($: Engine, port: number) {
   }
 }
 
-async function pageConfirmed($: Engine, seq: number) {
-  const server = review
-  if (!server) return false
-  for (let i = 0; i < 10; i++) {
-    const response = await $.http.fetch(`http://127.0.0.1:${server.port}/focus-seen?t=${server.token}`).catch(() => undefined)
-    if (response?.ok && (JSON.parse(response.text) as { seq: number }).seq === seq) return true
-    await $.clock.sleep(250)
-  }
-  return false
-}
-
 async function openReview($: Engine, branch?: string) {
   await startReview($)
   const url = await read($, reviewUrl)
   if (!url) {
     $.ui.toast("The review page couldn't start: it needs Node.js on Claude Code's PATH.", { timeoutMs: 8000 })
-    return
-  }
-  const seq = Date.now()
-  reviewFocus = { branch: branch ?? (await read($, snapshot)).branch, seq }
-  await pushReview($)
-  if (reviewConnected && (await pageConfirmed($, seq))) {
-    $.ui.toast(branch ? `Showing ${branch} in the open review page` : 'Switched the open review page')
     return
   }
   const target = branch ? `${url}#branch=${encodeURIComponent(branch)}` : url
@@ -937,6 +1116,7 @@ async function refresh($: Engine, mode: Mode) {
       isLoading: false,
     }))
     if (rows.length > 1 && !review) void startReview($)
+    else if (prs) void syncThreads($)
     const failing = rows.filter(r => r.pr?.ci === 'fail').length
     $.ui.status(failing ? `stack: ${failing} PR${failing > 1 ? 's' : ''} failing CI` : undefined)
   } catch (error) {

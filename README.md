@@ -47,7 +47,7 @@ The band appears on its own whenever the session's branch belongs to a Graphite 
 
 ## Review page
 
-**Review stack** in the band's header, or **Review ↗** on a branch's line counts, opens a live review page for the stack in your browser. Keep it open: it follows the session as Claude works, and when it's open those buttons switch it to the branch instead of opening another tab.
+**Review stack** in the band's header, or **Review ↗** on a branch's line counts, opens a live review page for the stack in your browser. Each click opens a new tab on that branch, and every open tab follows the session as Claude works.
 
 - The stack graph on the left switches between branches (or press `[` and `]`).
 - For a branch with a PR, the top shows its state, with a button to mark a draft **Ready for review** or **Convert to draft** (through `gh pr ready`), assigned reviewers with their review status (**Edit reviewers** opens a GitHub-style picker with suggestions to request or remove reviewers), and its labels, followed by the PR description (capped, with **Show all**). **Comment on description** adds feedback on the description, quoting any text you selected in it; Claude applies it by editing the PR description.
@@ -58,6 +58,7 @@ The band appears on its own whenever the session's branch belongs to a Graphite 
 - Click a code line, drag over line numbers, or shift-click a second line to leave an inline comment on one or more lines. A review covers one stack layer: **Review** lists the layer's pending comments, and **Send to Claude** hands them plus an overall note to Claude in the session, naming the layer, its branch and PR, and confirms once Claude Code picked them up.
 - Sent comments stay as a history: **Comments** lists pending and sent comments for the whole stack and jumps to each one. On the diff, sent comments show as faded cards, marked *Outdated* once their lines changed; dismiss them one by one, clear the history, or hide them from the diff.
 - The page updates live after commits, restacks and Claude's file edits.
+- GitHub review threads on the PR show inline at their line, with resolved ones collapsed and threads that no longer match the diff listed at the top of the file. **Add to review** puts a thread into the pending review, **Fix now** sends just that thread to Claude (who fixes it and resolves the thread with `gh`), and **Resolve** / **Unresolve** change it on GitHub. Thread details are fetched only while the page is running and only for PRs whose threads changed, and are cached.
 - The browser tab starts with what you're looking at (pending comment count, PR number and title, or branch) and ends with the stack's name. Each stack gets its own coloured favicon with its initial, so several review tabs stay easy to tell apart.
 
 Each session serves its own page on `127.0.0.1` with a fixed port, so several review pages can be open at once and an open tab reconnects after a restart. Requests need a random token in the page's URL, and other sites can't call it; see [SECURITY.md](SECURITY.md).

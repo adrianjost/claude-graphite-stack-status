@@ -84,7 +84,6 @@ if (prefs.format !== 'unified' && prefs.format !== 'split') prefs.format = 'spli
 
 let state = { version: -1, rows: [] }
 let selected = decodeURIComponent(location.hash.replace(/^#branch=/, '')) || ''
-let lastFocus = null
 let current = null
 let renderedKey = ''
 let files = []
@@ -378,7 +377,7 @@ const rangeLabel = c => (c.start && c.start !== c.line ? `lines ${c.start}–${c
 function lnCell(path, line, number, extra = '', column = 'new') {
   if (number === undefined) return `<td class="ln ${extra}"></td>`
   const target = targetOf(line)
-  const commented = comments.some(c => covers(c, path, target))
+  const commented = comments.some(c => c.kind !== 'thread' && covers(c, path, target))
   if (composers.some(c => covers(c, path, target))) extra += ' in-range'
   const isPending = column === 'new' && line.type !== 'del' && pending.get(path)?.has(line.new)
   return `<td class="ln ${extra}${commented ? ' commented' : ''}${isPending ? ' pending' : ''}"${isPending ? ' title="Uncommitted change"' : ''} data-path="${esc(path)}" data-side="${target.side}" data-line="${target.line}">${number}<button class="add-comment" tabindex="-1" title="Comment on this line">+</button></td>`
@@ -421,6 +420,52 @@ function strandedComments(path, isRendered) {
   return `${html}</div>`
 }
 
+const threadList = () => selectedRow()?.pr?.threads ?? []
+const openResolved = new Set()
+const threadErrors = new Map()
+let renderedThreads = new Set()
+const threadLine = t => t.line ?? t.originalLine ?? 1
+const isPlaced = t => !t.outdated && !!t.line
+
+function threadCard(thread) {
+  const first = thread.comments[0]
+  const inReview = comments.some(c => c.thread?.id === thread.id)
+  const wasSent = sent.some(c => c.thread?.id === thread.id)
+  const shown = !thread.resolved || openResolved.has(thread.id)
+  const error = threadErrors.get(thread.id)
+  const id = `data-thread="${esc(thread.id)}"`
+  const buttons = thread.resolved
+    ? `<button class="btn invisible" data-thread-act="toggle" ${id}>${shown ? 'Hide' : 'Show'}</button>` +
+      (thread.canToggle ? `<button class="btn invisible" data-thread-act="resolve" ${id}>Unresolve</button>` : '')
+    : (inReview
+        ? `<button class="btn invisible" data-thread-act="remove" ${id} title="Take this thread out of the pending review">Remove from review</button>`
+        : `<button class="btn invisible" data-thread-act="add" ${id} title="Add this thread to the pending review">Add to review</button>`) +
+      `<button class="btn invisible" data-thread-act="fix" ${id} title="Send just this thread to Claude to fix and resolve now">Fix now</button>` +
+      (thread.canToggle ? `<button class="btn invisible" data-thread-act="resolve" ${id}>Resolve</button>` : '')
+  const replies = thread.comments
+    .map(
+      (c, i) =>
+        `<div class="gh-comment">${
+          i ? `<div class="gh-reply-head">${avatar({ avatarUrl: c.avatar })}<strong>${esc(c.author)}</strong><span>${esc(timeAgo(Date.parse(c.createdAt)))}</span></div>` : ''
+        }<div class="markdown">${cleanHtml(c.bodyHtml)}</div></div>`,
+    )
+    .join('')
+  return `<div class="comment gh${thread.resolved ? ' resolved' : ''}" ${id}>
+    <div class="comment-head">${avatar({ avatarUrl: first?.avatar })}<strong>${esc(first?.author ?? '')}</strong><span class="badge gh">GitHub</span>${
+      thread.outdated ? '<span class="badge">Outdated</span>' : ''
+    }${thread.resolved ? '<span class="badge sent">Resolved</span>' : ''}${!thread.resolved && wasSent && !inReview ? '<span class="badge sent">Sent to Claude</span>' : ''}${
+      inReview ? '<span class="badge pending">In review</span>' : ''
+    }<span>${esc(timeAgo(Date.parse(first?.createdAt)))}</span><span>on ${rangeLabel({ start: thread.start, line: threadLine(thread) })}</span><span class="spacer"></span>${buttons}</div>
+    ${shown ? `<div class="gh-thread">${replies}</div>` : ''}
+    ${error ? `<div class="thread-error">${esc(error)}</div>` : ''}</div>`
+}
+
+function strandedThreads(path, isRendered, openOnly = false) {
+  const stranded = threadList().filter(t => t.path === path && !isRendered(t) && !(openOnly && t.resolved))
+  if (!stranded.length) return ''
+  return `<div class="stranded"><div class="stranded-head">GitHub threads on lines that are not in this diff</div>${stranded.map(threadCard).join('')}</div>`
+}
+
 function threadRows(path, targets, colspan) {
   let html = ''
   const row = (content, side) =>
@@ -432,12 +477,16 @@ function threadRows(path, targets, colspan) {
   for (const target of targets) {
     const at = { path, ...target }
     renderedTargets.add(targetKey(at))
-    for (const comment of comments.filter(c => sameTarget(c, at))) {
+    for (const thread of threadList().filter(t => isPlaced(t) && t.path === path && t.side === at.side && t.line === at.line)) {
+      renderedThreads.add(thread.id)
+      html += row(threadCard(thread), target.side)
+    }
+    for (const comment of comments.filter(c => c.kind !== 'thread' && sameTarget(c, at))) {
       if (composerAt(at)) continue
       html += row(pendingCard(comment, comments.indexOf(comment)), target.side)
     }
     if (prefs.showSent) {
-      for (const comment of sent.filter(c => sameTarget(c, at))) {
+      for (const comment of sent.filter(c => c.kind !== 'thread' && sameTarget(c, at))) {
         const index = sent.indexOf(comment)
         const outdated = codeAt(comment) !== (comment.code ?? '')
         html += row(
@@ -510,8 +559,9 @@ function hunkRow(split, expand, label, half = false) {
 
 function fileBody(file) {
   renderedTargets = new Set()
+  renderedThreads = new Set()
   const body = fileBodyInner(file)
-  return strandedComments(file.path, c => renderedTargets.has(targetKey(c))) + body
+  return strandedComments(file.path, c => renderedTargets.has(targetKey(c))) + strandedThreads(file.path, t => renderedThreads.has(t.id)) + body
 }
 
 function fileBodyInner(file) {
@@ -587,6 +637,7 @@ function fileCard(file) {
   const status = { added: 'Added', deleted: 'Deleted', renamed: 'Renamed' }[file.status]
   const name = file.status === 'renamed' ? `${pathHtml(file.oldPath)} → ${pathHtml(file.newPath)}` : pathHtml(file.path)
   const count = comments.filter(c => c.path === file.path).length
+  const openThreadCount = threadList().filter(t => t.path === file.path && !t.resolved).length
   const side = isHalf(file) ? (file.status === 'added' ? ' half new-side' : ' half old-side') : ''
   return `<section class="file${closed ? ' collapsed' : ''}${side}" data-file="${esc(file.path)}">
     <div class="file-head">
@@ -597,6 +648,7 @@ function fileCard(file) {
       <span class="spacer"></span>
       <span class="stat"><span class="add">+${file.added}</span> <span class="del">−${file.removed}</span>${bars(file)}</span>
       ${pending.has(file.path) ? '<span class="badge pending" title="Has uncommitted changes">Uncommitted</span>' : ''}
+      ${openThreadCount ? `<span class="badge gh" title="Unresolved GitHub review threads">${openThreadCount} open thread${openThreadCount === 1 ? '' : 's'}</span>` : ''}
       ${count ? `<span class="badge pending">${count} comment${count === 1 ? '' : 's'}</span>` : ''}
       <label class="viewed-toggle"><input type="checkbox" data-viewed="${esc(file.path)}" ${viewed ? 'checked' : ''}>Viewed</label>
     </div>
@@ -657,6 +709,12 @@ DOMPurify.addHook('afterSanitizeAttributes', node => {
   }
 })
 
+const cleanHtml = html =>
+  DOMPurify.sanitize(html.replace(/\sstyle=("[^"]*"|'[^']*')/gi, ''), {
+    FORBID_TAGS: ['style', 'form', 'iframe', 'object', 'embed'],
+    FORBID_ATTR: ['style'],
+  })
+
 let descriptionHtml = null
 let descriptionOpen = false
 
@@ -677,10 +735,7 @@ function renderDescription() {
     descriptionHtml = key
     const target = section.querySelector('.description-body')
     if (pr) {
-      target.innerHTML = DOMPurify.sanitize(body.replace(/\sstyle=("[^"]*"|'[^']*')/gi, ''), {
-        FORBID_TAGS: ['style', 'form', 'iframe', 'object', 'embed'],
-        FORBID_ATTR: ['style'],
-      })
+      target.innerHTML = cleanHtml(body)
     } else {
       target.innerHTML = `<p class="draft-note">Preview from the first commit's message, which becomes the PR title and description.</p>${
         body ? `<div class="commit-body">${esc(body)}</div>` : '<p class="muted">The commit message has no body.</p>'
@@ -920,10 +975,15 @@ function renderHeader() {
 function renderDiff() {
   $('#notice').textContent = current?.error ?? ''
   const paths = new Set(files.map(f => f.path))
-  const gone = [...new Set(comments.filter(c => !c.kind && !paths.has(c.path)).map(c => c.path))]
+  const gone = [
+    ...new Set([
+      ...comments.filter(c => !c.kind && !paths.has(c.path)).map(c => c.path),
+      ...threadList().filter(t => !t.resolved && !paths.has(t.path)).map(t => t.path),
+    ]),
+  ]
   const orphans = gone
     .map(path => `<section class="file" data-file="${esc(path)}"><div class="file-head"><span class="path">${pathHtml(path)}</span><span class="badge">No longer changed</span></div>
-      <div class="file-body">${strandedComments(path, () => false)}</div></section>`)
+      <div class="file-body">${strandedComments(path, () => false)}${strandedThreads(path, () => false, true)}</div></section>`)
     .join('')
   $('#diff').innerHTML = orphans + (files.length
     ? files.map(fileCard).join('')
@@ -1033,7 +1093,7 @@ function commentItems(list, kind) {
     for (const comment of items) {
       jumps.push(comment)
       html += `<div class="comment-item${kind === 'sent' ? ' sent' : ''}" data-jump="${jumps.length - 1}">
-        <div class="where"><code>${
+        <div class="where">${comment.kind === 'thread' ? '<span class="badge gh">GitHub</span>' : ''}<code>${
           comment.kind === 'description'
             ? 'PR description'
             : `${esc(comment.path)}:${comment.start && comment.start !== comment.line ? `${comment.start}–${comment.line}` : comment.line}`
@@ -1105,7 +1165,7 @@ function jumpTo(target) {
 }
 
 function openComposer(target) {
-  const existing = comments.find(c => sameTarget(c, target))
+  const existing = comments.find(c => c.kind !== 'thread' && sameTarget(c, target))
   const start = target.start ?? existing?.start ?? target.line
   const touched = new Set([target.path])
   composers = composers.filter(c => {
@@ -1144,7 +1204,7 @@ function saveComposer(composer) {
   const text = document.querySelector(`.composer[data-box="${CSS.escape(targetKey(composer))}"] textarea`)?.value.trim() ?? composer.text?.trim() ?? ''
   const target = { path: composer.path, side: composer.side, line: composer.line }
   const range = composer.start !== composer.line ? { ...target, start: composer.start } : target
-  comments = comments.filter(c => !sameTarget(c, target))
+  comments = comments.filter(c => c.kind === 'thread' || !sameTarget(c, target))
   if (text) comments.push({ ...range, text, code: codeAt(range), base: current?.parent })
   comments.sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line)
   composers = composers.filter(c => c !== composer)
@@ -1190,7 +1250,7 @@ async function sendNow(comment, button) {
   }
   sent = [...sent, { ...comment, sentAt: Date.now() }]
   store(`sent:${selected}`, sent)
-  comments = comments.filter(c => !sameTarget(c, comment))
+  comments = comments.filter(c => c.kind === 'thread' || !sameTarget(c, comment))
   persistComments()
   rerenderFile(comment.path)
   renderHeader()
@@ -1205,9 +1265,81 @@ async function sendComposerNow(button, composer) {
   if (!text) return
   const target = { path: composer.path, side: composer.side, line: composer.line }
   saveComposer(composer)
-  const index = comments.findIndex(c => sameTarget(c, target))
+  const index = comments.findIndex(c => c.kind !== 'thread' && sameTarget(c, target))
   if (index < 0) return
   await sendNow(comments[index], document.querySelector(`[data-send-now="${index}"]`) ?? button)
+}
+
+function threadComment(thread) {
+  const range = { path: thread.path, side: thread.side, ...(thread.start ? { start: thread.start } : {}), line: threadLine(thread) }
+  return {
+    kind: 'thread',
+    ...range,
+    text: thread.comments.map(c => `@${c.author}: ${c.body.trim().slice(0, 2000)}`).join('\n\n'),
+    code: thread.outdated ? '' : codeAt(range),
+    base: current?.parent,
+    thread: { id: thread.id, url: thread.comments[0]?.url ?? '' },
+  }
+}
+
+function refreshThread(thread) {
+  rerenderFile(thread.path)
+  renderHeader()
+  renderCommentViews()
+}
+
+async function fixThread(thread, button) {
+  const comment = threadComment(thread)
+  button.disabled = true
+  button.textContent = 'Sending…'
+  const result = await deliver([comment]).catch(() => null)
+  if (!result) {
+    button.disabled = false
+    button.textContent = 'Retry'
+    showTip(button, "Claude Code isn't reachable")
+    return
+  }
+  comments = comments.filter(c => c.thread?.id !== thread.id)
+  persistComments()
+  sent = [...sent, { ...comment, sentAt: Date.now() }]
+  store(`sent:${selected}`, sent)
+  refreshThread(thread)
+  showTip(document.querySelector('[data-act="review"]') ?? button, result.data?.queued ? 'Queued for Claude ✓' : 'Sent to Claude ✓')
+}
+
+async function resolveThread(thread, button) {
+  const resolve = !thread.resolved
+  button.disabled = true
+  button.textContent = resolve ? 'Resolving…' : 'Reopening…'
+  threadErrors.delete(thread.id)
+  const result = await runAction({ type: 'thread-resolve', threadId: thread.id, resolve, branch: selected }).catch(() => null)
+  if (result?.ok) {
+    thread.resolved = resolve
+    openResolved.delete(thread.id)
+  } else threadErrors.set(thread.id, result ? (result.message ?? 'GitHub refused the change') : 'Claude Code did not answer')
+  refreshThread(thread)
+}
+
+function threadAct(button) {
+  const thread = threadList().find(t => t.id === button.dataset.thread)
+  const act = button.dataset.threadAct
+  if (!thread) return
+  if (act === 'toggle') {
+    if (!openResolved.delete(thread.id)) openResolved.add(thread.id)
+    refreshThread(thread)
+  }
+  if (act === 'add') {
+    comments = [...comments.filter(c => c.thread?.id !== thread.id), threadComment(thread)].sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line)
+    persistComments()
+    refreshThread(thread)
+  }
+  if (act === 'remove') {
+    comments = comments.filter(c => c.thread?.id !== thread.id)
+    persistComments()
+    refreshThread(thread)
+  }
+  if (act === 'fix') fixThread(thread, button)
+  if (act === 'resolve') resolveThread(thread, button)
 }
 
 function insertSuggestion(composer, area) {
@@ -1561,10 +1693,11 @@ document.addEventListener('click', event => {
   const head = t.closest('.file-head')
   const headToggle =
     head && !t.closest('button, label, input, a') && window.getSelection()?.isCollapsed !== false ? head.querySelector('[data-collapse]') : null
-  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-jump],[data-describe-edit],[data-send-now],[data-remove-at]')
+  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-jump],[data-describe-edit],[data-send-now],[data-remove-at],[data-thread-act]')
   if (!t.closest('#submit') && !t.closest('[data-act="review"]')) $('#submit').hidden = true
   if (!el) return
   const d = el.dataset
+  if (d.threadAct) return threadAct(el)
   if (d.branch !== undefined && !el.classList.contains('trunk')) select(d.branch)
   if (d.nav) navigate(Number(d.nav))
   if (d.format) setPref('format', d.format)
@@ -1818,19 +1951,16 @@ async function poll() {
       $('#connection').title = 'Live'
       if (next.version === state.version) continue
       const restarted = next.version < state.version
+      const threadsWere = JSON.stringify(selectedRow()?.pr?.threads)
       state = { ...next, rows: next.rows ?? [] }
-      if (state.focus && state.focus.seq !== lastFocus) {
-        if (lastFocus !== null || !selected) select(state.focus.branch)
-        lastFocus = state.focus.seq
-        api('/focus-seen', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ seq: lastFocus }) }).catch(() => {})
-      }
       if (!state.rows.some(r => r.branch === selected && !r.isTrunk)) {
         const fallback = state.rows.find(r => r.isCurrent && !r.isTrunk) ?? stackRows()[0]
         selected = ''
         if (fallback) select(fallback.branch)
       }
       renderStack()
-      if (!composers.length || !renderedKey) loadDiff(restarted)
+      const threadsChanged = JSON.stringify(selectedRow()?.pr?.threads) !== threadsWere
+      if (!composers.length || !renderedKey) loadDiff(restarted).then(() => threadsChanged && !restarted && renderAll())
     } catch {
       $('#connection').className = 'connection offline'
       $('#connection').title = 'Disconnected: waiting for Claude Code'

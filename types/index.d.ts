@@ -23,6 +23,7 @@ export type PrInfo = {
   ciCounts: { pass: number; fail: number; pending: number }
   failing: { name: string; workflow?: string; url?: string }[]
   openThreads: number
+  threadFp?: string
   hasReviewers: boolean
   reviewers?: { name: string; state: string }[]
   bodyHtml?: string

@@ -20,8 +20,6 @@ let actions = []
 let actionWaiters = []
 let nextActionId = 1
 const delivered = new Map()
-let lastSeen = 0
-let focusSeen = 0
 
 function hasToken(value) {
   const given = Buffer.from(String(value ?? ''))
@@ -169,20 +167,13 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === '/state' && req.method === 'POST') {
       publish(await readBody(req, 8 * 1024 * 1024))
-      return send(res, 200, { version: state.version, isConnected: Date.now() - lastSeen < 40_000 })
+      return send(res, 200, { version: state.version })
     }
     if (url.pathname === '/state') {
-      lastSeen = Date.now()
       const since = Number(url.searchParams.get('v') ?? -1)
       if (state.version === since || state.version === 0) await waitFor(stateWaiters, 25_000)
-      lastSeen = Date.now()
       return send(res, 200, state)
     }
-    if (url.pathname === '/focus-seen' && req.method === 'POST') {
-      focusSeen = Number((await readBody(req, 1024)).seq) || 0
-      return send(res, 200, { ok: true })
-    }
-    if (url.pathname === '/focus-seen') return send(res, 200, { seq: focusSeen })
     if (url.pathname === '/diff') return send(res, 200, await diffFor(url.searchParams))
     if (url.pathname === '/file') return send(res, 200, await fileFor(url.searchParams))
     if (url.pathname === '/action' && req.method === 'POST') {
