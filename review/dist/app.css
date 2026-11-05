@@ -1980,3 +1980,20 @@ td.ln[data-line]:has(+ td.code:hover) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.comment .msg + .msg {
+  border-top: 1px solid var(--border);
+}
+
+.comment.thread .composer {
+  max-width: none;
+  border: 0;
+  border-top: 1px solid var(--border-muted);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.ref {
+  font: 11px var(--mono);
+  color: var(--muted);
+}

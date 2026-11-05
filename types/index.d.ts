@@ -4,7 +4,7 @@ export type UpdateInfo = { version: string; url: string; state: 'available' | 'u
 
 export type WaitingPrompt = string | { text: string; branch?: string; refs?: string[] }
 
-export type ReviewReply = { status?: 'fixed' | 'replied'; text?: string; from?: string; to?: string }
+export type ReviewReply = { status?: 'fixed' | 'replied'; text?: string; from?: string; to?: string; ref?: string }
 
 export type Issue = {
   message: string

@@ -759,6 +759,9 @@ type ReviewComment = {
   side: 'old' | 'new'
   text: string
   code?: string
+  replyTo?: string | number
+  parentRef?: string
+  context?: string
 }
 type PrReadyAction = { type: 'pr-ready'; number: number; ready: boolean }
 type ReviewersLoadAction = { type: 'reviewers-load'; number: number; query?: string }
@@ -895,6 +898,12 @@ function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
   const where = (c: ReviewComment) =>
     `\`${c.path}:${c.start && c.start !== c.line ? `${c.start}-${c.line}` : c.line}\`` +
     (c.side === 'old' ? ` (removed line${c.start && c.start !== c.line ? 's' : ''})` : '')
+  const followUp = (c: ReviewComment) => {
+    if (!c.replyTo) return undefined
+    if (c.parentRef && refTargets.get(c.parentRef)?.id === String(c.replyTo)) return { target: `re ${c.parentRef}`, tail: '' }
+    const context = (c.context ?? '').replace(/\s+/g, ' ').trim().slice(0, 100)
+    return { target: where(c), tail: context ? `\n   (follow-up to: "${context}")` : '' }
+  }
   const mine = action.comments.filter(c => (c.branch ?? action.branch) === action.branch)
   const comments = mine.filter(c => c.kind !== 'description')
   const notes = mine.filter(c => c.kind === 'description')
@@ -913,14 +922,15 @@ function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
     return { refs, text: `GitHub review thread on ${subject}, ${where(single)} (${url}, thread id \`${id}\`):\n\n${single.text}${single.note ? `\nGuidance: ${single.note}` : ''}${quoteLines(single.code)}\n\nPlease ${THREAD_TAIL.replace('<thread id>', id)}` }
   }
   if (single) {
-    const target = single.kind === 'description' ? (pr ? 'the PR description' : 'the commit message') : where(single)
+    const follow = followUp(single)
+    const target = follow ? follow.target : single.kind === 'description' ? (pr ? 'the PR description' : 'the commit message') : where(single)
     const apply =
       single.kind === 'description'
         ? pr
           ? ' Apply it by editing the PR description on GitHub.'
           : " Apply it to the branch's commit message."
         : ''
-    return { refs, text: `Review comment on ${subject}, ${mark(single, 0)}${target}: ${single.text}${quoteLines(single.kind === 'description' ? single.quote : single.code)}${apply ? `\n\n${apply.trim()}` : ''}` }
+    return { refs, text: `Review comment on ${subject}, ${mark(single, 0)}${target}: ${single.text}${follow ? follow.tail : quoteLines(single.kind === 'description' ? single.quote : single.code)}${apply ? `\n\n${apply.trim()}` : ''}` }
   }
   const base = action.compareTo ?? comments.find(c => c.base)?.base
   const text = [
@@ -937,7 +947,7 @@ function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
           .map((c, i) =>
             c.thread
               ? `${mark(c, i)}${where(c)}: GitHub review thread ${c.thread.url} (thread id \`${c.thread.id}\`)\n   ${indent(c.text)}${c.note ? `\n   Guidance: ${indent(c.note)}` : ''}${quoteLines(c.code)}`
-              : `${mark(c, i)}${where(c)}: ${c.text}${quoteLines(c.code)}`,
+              : (follow => `${mark(c, i)}${follow ? follow.target : where(c)}: ${c.text}${follow ? follow.tail : quoteLines(c.code)}`)(followUp(c)),
           )
           .join('\n')}`
       : '',
@@ -1010,6 +1020,16 @@ async function endTrack($: Engine) {
   schedulePushReview($)
 }
 
+async function storeRefs($: Engine, refs: string[]) {
+  const entries = refs.flatMap(ref => {
+    const target = refTargets.get(ref)
+    return target ? [[target.id, ref] as const] : []
+  })
+  if (!entries.length) return
+  await update($, reviewReplies, map => trimReplies({ ...map, ...Object.fromEntries(entries.map(([id, ref]) => [id, { ...map[id], ref }])) }))
+  schedulePushReview($)
+}
+
 function trimReplies(map: Record<string, ReviewReply>) {
   const keys = Object.keys(map)
   for (const key of keys.slice(0, Math.max(0, keys.length - MAX_REPLIES))) delete map[key]
@@ -1020,12 +1040,12 @@ async function answerReview($: Engine, input: { fixed?: unknown; replies?: unkno
   const entries: [string, ReviewReply][] = []
   for (const ref of Array.isArray(input.fixed) ? input.fixed : []) {
     const target = typeof ref === 'string' ? refTargets.get(ref) : undefined
-    if (target) entries.push([target.id, { status: 'fixed', text: undefined }])
+    if (target) entries.push([target.id, { status: 'fixed', text: undefined, ref }])
   }
   for (const item of Array.isArray(input.replies) ? input.replies : []) {
     const { ref, text } = (item ?? {}) as { ref?: unknown; text?: unknown }
     const target = typeof ref === 'string' ? refTargets.get(ref) : undefined
-    if (target && typeof text === 'string' && text.trim()) entries.push([target.id, { status: 'replied', text: text.trim().slice(0, 1000) }])
+    if (target && typeof text === 'string' && text.trim()) entries.push([target.id, { status: 'replied', text: text.trim().slice(0, 1000), ref: ref as string }])
   }
   if (!entries.length) return { deny: 'No matching refs: use the refs from the review message, like c1.' }
   await update($, reviewReplies, map => {
@@ -1120,6 +1140,7 @@ async function pollReviewActions($: Engine, port: number) {
       }
       if (!handled.has(action.id) && action.type === 'review' && (action.comments.length || action.summary)) {
         const { text, refs } = reviewPrompt(action, (await read($, snapshot)).rows)
+        await storeRefs($, refs)
         await queuePrompt($, text, action.branch, refs)
         results[action.id] = { ok: true, data: { queued: turnRunning } }
       }

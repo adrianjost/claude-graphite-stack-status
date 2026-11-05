@@ -95,8 +95,9 @@ let pendingJump = null
 let composers = []
 let threadNotes = []
 const noteAt = id => threadNotes.find(n => n.id === id)
-const composerAt = target => composers.find(c => sameTarget(c, target))
-const composerFor = el => composers.find(c => targetKey(c) === el?.closest?.('.composer')?.dataset.box)
+const composerAt = target => composers.find(c => !c.replyTo && sameTarget(c, target))
+const composerFor = el => composers.find(c => boxKey(c) === el?.closest?.('.composer')?.dataset.box)
+const lastBox = () => composers.findLast(c => !c.replyTo)
 let shownHeavy = new Set()
 let collapsed = new Set()
 let expansions = new Map()
@@ -374,6 +375,7 @@ function targetOf(line) {
 }
 
 const sameTarget = (a, b) => !!a && !!b && a.path === b.path && a.side === b.side && a.line === b.line
+const sameBox = (a, b) => sameTarget(a, b) && a.replyTo === b.replyTo
 
 const covers = (range, path, target) =>
   !!range && range.path === path && range.side === target.side && (range.start ?? range.line) <= target.line && target.line <= range.line
@@ -384,17 +386,21 @@ function lnCell(path, line, number, extra = '', column = 'new') {
   if (number === undefined) return `<td class="ln ${extra}"></td>`
   const target = targetOf(line)
   const commented = comments.some(c => c.kind !== 'thread' && covers(c, path, target))
-  if (composers.some(c => covers(c, path, target))) extra += ' in-range'
+  if (composers.some(c => !c.replyTo && covers(c, path, target))) extra += ' in-range'
   const isPending = column === 'new' && line.type !== 'del' && pending.get(path)?.has(line.new)
   return `<td class="ln ${extra}${commented ? ' commented' : ''}${isPending ? ' pending' : ''}"${isPending ? ' title="Uncommitted change"' : ''} data-path="${esc(path)}" data-side="${target.side}" data-line="${target.line}">${number}<button class="add-comment" tabindex="-1" title="Comment on this line">+</button></td>`
 }
 
 let renderedTargets = new Set()
 const targetKey = t => `${t.path}|${t.side}|${t.line}`
+const boxKey = t => (t.replyTo ? `${targetKey(t)}|${t.replyTo}` : targetKey(t))
 
 function pendingCard(comment, index, note = '') {
-  return `<div class="comment">
-    <div class="comment-head"><strong>You</strong><span class="badge">Pending</span><span>on ${rangeLabel(comment)}</span>${note}<span class="spacer"></span>
+  return `<div class="comment">${pendingMsg(comment, index, `<span>on ${rangeLabel(comment)}</span>${note}`)}</div>`
+}
+
+function pendingMsg(comment, index, extra = '') {
+  return `<div class="msg"><div class="comment-head"><strong>You</strong><span class="badge">Pending</span>${comment.replyTo ? '<span>follow-up</span>' : ''}${extra}<span class="spacer"></span>
       <button class="btn invisible" data-send-now="${index}" title="Send just this comment to Claude now">Send now</button>
       <button class="btn invisible" data-edit="${index}">Edit</button>
       <button class="btn invisible" data-remove="${index}">Delete</button></div>
@@ -402,12 +408,13 @@ function pendingCard(comment, index, note = '') {
 }
 
 function composerBox(composer) {
-  return `<div class="composer" data-box="${esc(targetKey(composer))}">
-    <textarea placeholder="Leave a comment for Claude on ${rangeLabel(composer)}…">${esc(composer.text ?? '')}</textarea>
-    <div class="actions">${composer.side === 'new' ? '<button class="btn invisible" data-act="suggest" title="Suggest a replacement for the selected lines">± Suggest change</button>' : ''}<span class="muted hint">⌘↵ to save · Esc to cancel</span>
+  const reply = !!composer.replyTo
+  return `<div class="composer" data-box="${esc(boxKey(composer))}">
+    <textarea placeholder="${reply ? 'Reply to Claude…' : `Leave a comment for Claude on ${rangeLabel(composer)}…`}">${esc(composer.text ?? '')}</textarea>
+    <div class="actions">${composer.side === 'new' && !reply ? '<button class="btn invisible" data-act="suggest" title="Suggest a replacement for the selected lines">± Suggest change</button>' : ''}<span class="muted hint">⌘↵ to save · Esc to cancel</span>
       <button class="btn" data-act="cancel">Cancel</button>
       <button class="btn" data-act="send-now" title="Send just this comment to Claude now, without the rest of the review">Send to Claude now</button>
-      <button class="btn primary" data-act="save">${composer.existing ? 'Update comment' : 'Add comment'}</button></div>
+      <button class="btn primary" data-act="save">${reply ? 'Add to review' : composer.existing ? 'Update comment' : 'Add comment'}</button></div>
     </div>`
 }
 
@@ -430,7 +437,45 @@ const openChanges = new Set()
 const changeViews = new Map()
 const changesKey = c => `${c.answer.from}..${c.answer.to}|${c.kind ? '' : c.path}|${prefs.whitespace ? 1 : 0}`
 
-const sentClass = c => `comment sent${c.answer ? ' answered' : ''}`
+const hasAnswer = c => !!(c.answer?.status || c.answer?.from)
+const sentClass = c => `comment sent${hasAnswer(c) ? ' answered' : ''}`
+const refTag = c => (c.answer?.ref ? `<span class="ref">${esc(c.answer.ref)}</span>` : '')
+const threadsOf = list => {
+  const ids = new Set(list.map(c => c.id))
+  const kids = new Map()
+  const roots = []
+  for (const c of list) {
+    if (c.replyTo && ids.has(c.replyTo)) kids.set(c.replyTo, [...(kids.get(c.replyTo) ?? []), c])
+    else roots.push(c)
+  }
+  const walk = c => [c, ...(kids.get(c.id) ?? []).flatMap(walk)]
+  return roots.map(walk)
+}
+const refreshFollowUps = list => list.forEach(c => c.replyTo && Object.assign(c, followUpMeta(c.replyTo)))
+const clip = text => (text.length > 100 ? `${text.slice(0, 100)}…` : text)
+
+function followUpMeta(parentId) {
+  const parent = sent.find(c => c.id === parentId)
+  return { parentRef: parent?.answer?.ref, context: parent ? clip((parent.answer?.text || parent.text).replace(/\s+/g, ' ')) : undefined }
+}
+
+function sentThread(chain) {
+  const root = chain[0]
+  const leaf = chain.at(-1)
+  const draft = comments.find(c => c.replyTo === leaf.id)
+  const box = composers.find(c => c.replyTo === leaf.id)
+  const outdated = codeAt(root) !== (root.code ?? '')
+  const msgs = chain
+    .map(
+      c => `<div class="msg"><div class="comment-head"><strong>You</strong>${refTag(c)}<span class="badge sent">Sent to Claude</span>${answerBadge(c)}${c === root && outdated ? '<span class="badge">Outdated</span>' : ''}<span>${esc(timeAgo(c.sentAt))}</span><span class="spacer"></span>${
+        c === leaf && !draft && !box ? `<button class="btn invisible" data-reply="${sent.indexOf(c)}" title="Follow up on this with Claude">Reply</button>` : ''
+      }${c === root ? `<button class="btn invisible" data-dismiss="${sent.indexOf(c)}" title="${chain.length > 1 ? 'Dismiss this conversation' : 'Dismiss'}">Dismiss</button>` : ''}</div>
+        <div class="comment-body">${esc(c.text)}</div>${answerBlock(c)}</div>`,
+    )
+    .join('')
+  const pendingFollowUp = draft && !box ? pendingMsg(draft, comments.indexOf(draft)) : ''
+  return `<div class="${sentClass(root)} thread${chain.some(hasAnswer) || draft || box ? ' answered' : ''}">${msgs}${pendingFollowUp}${box ? composerBox(box) : ''}</div>`
+}
 
 function answerBadge(c) {
   const status = c.answer?.status
@@ -591,21 +636,11 @@ function threadRows(path, targets, colspan) {
       html += row(threadCard(thread), target.side)
     }
     for (const comment of comments.filter(c => c.kind !== 'thread' && sameTarget(c, at))) {
-      if (composerAt(at)) continue
+      if (comment.replyTo ? sent.some(c => c.id === comment.replyTo) : composerAt(at)) continue
       html += row(pendingCard(comment, comments.indexOf(comment)), target.side)
     }
-    if (prefs.showSent) {
-      for (const comment of sent.filter(c => c.kind !== 'thread' && sameTarget(c, at))) {
-        const index = sent.indexOf(comment)
-        const outdated = codeAt(comment) !== (comment.code ?? '')
-        html += row(
-          `<div class="${sentClass(comment)}">
-          <div class="comment-head"><strong>You</strong><span class="badge sent">Sent to Claude</span>${answerBadge(comment)}${outdated ? '<span class="badge">Outdated</span>' : ''}<span>${esc(timeAgo(comment.sentAt))}</span><span class="spacer"></span>
-            <button class="btn invisible" data-dismiss="${index}">Dismiss</button></div>
-          <div class="comment-body">${esc(comment.text)}</div>${answerBlock(comment)}</div>`,
-          target.side,
-        )
-      }
+    for (const chain of threadsOf(sent.filter(c => c.kind !== 'thread' && sameTarget(c, at)))) {
+      if (prefs.showSent || comments.some(c => c.replyTo === chain.at(-1).id) || composers.some(c => c.replyTo === chain.at(-1).id)) html += row(sentThread(chain), target.side)
     }
     const box = composerAt(at)
     if (box) html += row(composerBox(box), target.side)
@@ -1192,15 +1227,22 @@ function collect(kind) {
   })
 }
 
-function commentItems(list, kind) {
+function commentItems(list, kind, followUps = new Map()) {
   if (!list.length) return ''
   const groups = new Map()
   for (const comment of list) groups.set(comment.branch, [...(groups.get(comment.branch) ?? []), comment])
   let html = ''
+  const text = (c, _, chain) =>
+    `<div class="text">${c.answer?.ref ? `<span class="ref">${esc(c.answer.ref)}</span> ` : ''}${esc(c.text)}</div>${c.note ? `<div class="text"><strong>You:</strong> ${esc(c.note)}</div>` : ''}${
+      chain.length > 1 && c.answer?.text ? `<div class="text"><strong>Claude:</strong> ${esc(c.answer.text)}</div>` : ''
+    }`
   for (const [branch, items] of groups) {
     html += `<div class="group-head">${esc(branch)}</div>`
-    for (const comment of items) {
+    for (const chain of kind === 'sent' ? threadsOf(items) : items.map(c => [c])) {
+      const comment = chain[0]
       jumps.push(comment)
+      const last = chain.at(-1)
+      const draft = kind === 'sent' ? followUps.get(last.id) : undefined
       html += `<div class="comment-item${kind === 'sent' ? ' sent' : ''}" data-jump="${jumps.length - 1}">
         <div class="where">${comment.kind === 'thread' ? '<span class="badge gh">GitHub</span>' : ''}<code>${
           comment.kind === 'description'
@@ -1209,10 +1251,10 @@ function commentItems(list, kind) {
         }</code>
           ${
             kind === 'sent'
-              ? `${answerBadge(comment)}<span class="muted">${esc(timeAgo(comment.sentAt))}</span>`
-              : `<button class="btn invisible delete-item" data-remove-at="${jumps.length - 1}" title="Delete this comment">Delete</button>`
+              ? `${answerBadge(last)}<span class="muted">${esc(timeAgo(last.sentAt))}</span>`
+              : `${comment.replyTo ? '<span class="muted">follow-up</span>' : ''}<button class="btn invisible delete-item" data-remove-at="${jumps.length - 1}" title="Delete this comment">Delete</button>`
           }</div>
-        <div class="text">${esc(comment.text)}</div>${comment.note ? `<div class="text"><strong>You:</strong> ${esc(comment.note)}</div>` : ''}</div>`
+        ${chain.map(text).join('')}${draft ? `<div class="text"><span class="badge">Pending</span> ${esc(draft.text)}</div>` : ''}</div>`
     }
   }
   return html
@@ -1232,7 +1274,7 @@ function renderCommentViews() {
   }
   $('#comments-list').innerHTML =
     `<div class="list-head">Pending (${pendingAll.length})</div>${commentItems(pendingAll, 'pending') || '<div class="empty-note">Nothing pending.</div>'}` +
-    `<div class="list-head">Sent to Claude (${sentAll.length})${sentAll.length ? '<button class="btn invisible" data-act="clear-sent">Clear</button>' : ''}</div>${commentItems(sentAll, 'sent') || '<div class="empty-note">Comments you send stay here as a history.</div>'}`
+    `<div class="list-head">Sent to Claude (${sentAll.length})${sentAll.length ? '<button class="btn invisible" data-act="clear-sent">Clear</button>' : ''}</div>${commentItems(sentAll, 'sent', new Map(pendingAll.filter(c => c.replyTo).map(c => [c.replyTo, c]))) || '<div class="empty-note">Comments you send stay here as a history.</div>'}`
   const toggle = document.querySelector('[data-toggle="show-sent"]')
   if (toggle) toggle.checked = prefs.showSent
 }
@@ -1274,18 +1316,18 @@ function jumpTo(target) {
 }
 
 function openComposer(target) {
-  const existing = comments.find(c => c.kind !== 'thread' && sameTarget(c, target))
+  const existing = comments.find(c => c.kind !== 'thread' && sameBox(c, target))
   const start = target.start ?? existing?.start ?? target.line
   const touched = new Set([target.path])
   composers = composers.filter(c => {
-    const keep = (c.text ?? '').trim() && !sameTarget(c, target)
+    const keep = (c.text ?? '').trim() && !sameBox(c, target)
     if (!keep) touched.add(c.path)
     return keep
   })
-  const box = { path: target.path, side: target.side, start, line: target.line, text: target.text ?? existing?.text ?? '', existing: !!existing }
+  const box = { path: target.path, side: target.side, start, line: target.line, text: target.text ?? existing?.text ?? '', existing: !!existing, ...(target.replyTo ? { replyTo: target.replyTo } : {}) }
   composers.push(box)
   touched.forEach(rerenderFile)
-  const area = document.querySelector(`.composer[data-box="${CSS.escape(targetKey(box))}"] textarea`)
+  const area = document.querySelector(`.composer[data-box="${CSS.escape(boxKey(box))}"] textarea`)
   area?.focus()
   area?.setSelectionRange(area.value.length, area.value.length)
   saveDraft()
@@ -1310,11 +1352,11 @@ function codeAt(range) {
 
 function saveComposer(composer) {
   if (!composer) return
-  const text = document.querySelector(`.composer[data-box="${CSS.escape(targetKey(composer))}"] textarea`)?.value.trim() ?? composer.text?.trim() ?? ''
+  const text = document.querySelector(`.composer[data-box="${CSS.escape(boxKey(composer))}"] textarea`)?.value.trim() ?? composer.text?.trim() ?? ''
   const target = { path: composer.path, side: composer.side, line: composer.line }
   const range = composer.start !== composer.line ? { ...target, start: composer.start } : target
-  comments = comments.filter(c => c.kind === 'thread' || !sameTarget(c, target))
-  if (text) comments.push({ ...range, text, code: codeAt(range), base: current?.parent })
+  comments = comments.filter(c => c.kind === 'thread' || !sameBox(c, composer))
+  if (text) comments.push(composer.replyTo ? { ...range, text, base: current?.parent, replyTo: composer.replyTo, ...followUpMeta(composer.replyTo) } : { ...range, text, code: codeAt(range), base: current?.parent })
   comments.sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line)
   composers = composers.filter(c => c !== composer)
   persistComments()
@@ -1326,6 +1368,7 @@ function saveComposer(composer) {
 
 async function deliver(list) {
   ensureIds(list)
+  refreshFollowUps(list)
   const { id } = await api('/action', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -1359,8 +1402,9 @@ async function sendNow(comment, button) {
     return false
   }
   sent = [...sent, { ...comment, sentAt: Date.now() }]
+  applyReplies()
   store(`sent:${selected}`, sent)
-  comments = comments.filter(c => c.kind === 'thread' || !sameTarget(c, comment))
+  comments = comments.filter(c => c !== comment)
   persistComments()
   rerenderFile(comment.path)
   renderHeader()
@@ -1375,7 +1419,7 @@ async function sendComposerNow(button, composer) {
   if (!text) return
   const target = { path: composer.path, side: composer.side, line: composer.line }
   saveComposer(composer)
-  const index = comments.findIndex(c => c.kind !== 'thread' && sameTarget(c, target))
+  const index = comments.findIndex(c => c.kind !== 'thread' && sameBox(c, composer))
   if (index < 0) return
   await sendNow(comments[index], document.querySelector(`[data-send-now="${index}"]`) ?? button)
 }
@@ -1551,6 +1595,7 @@ async function setReady(button) {
 function finishReview(pendingAll) {
   const sentAt = Date.now()
   sent = [...sent, ...pendingAll.map(({ branch, ...c }) => ({ ...c, sentAt }))]
+  applyReplies()
   store(`sent:${selected}`, sent)
   $('#summary').value = ''
   saveDraft()
@@ -1575,6 +1620,7 @@ async function sendReview() {
   button.disabled = true
   button.textContent = 'Sending…'
   ensureIds(pendingAll)
+  refreshFollowUps(pendingAll)
   let id
   try {
     ;({ id } = await api('/action', {
@@ -1811,7 +1857,7 @@ document.addEventListener('click', event => {
     if (!ln?.dataset.line) ln = ln?.previousElementSibling
     if (ln?.dataset.line) {
       const at = cellTarget(ln)
-      const last = composers.at(-1)
+      const last = lastBox()
       const extend = event.shiftKey && last && last.path === at.path && last.side === at.side
       const start = extend ? Math.min(last.start, at.line) : at.line
       const end = extend ? Math.max(last.line, at.line) : at.line
@@ -1824,7 +1870,7 @@ document.addEventListener('click', event => {
   const head = t.closest('.file-head')
   const headToggle =
     head && !t.closest('button, label, input, a') && window.getSelection()?.isCollapsed !== false ? head.querySelector('[data-collapse]') : null
-  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-jump],[data-describe-edit],[data-send-now],[data-remove-at],[data-thread-act],[data-changes]')
+  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-reply],[data-jump],[data-describe-edit],[data-send-now],[data-remove-at],[data-thread-act],[data-changes]')
   if (!t.closest('#submit') && !t.closest('[data-act="review"]')) $('#submit').hidden = true
   if (!el) return
   const d = el.dataset
@@ -1879,10 +1925,23 @@ document.addEventListener('click', event => {
     renderCommentViews()
     renderDescriptionThreads()
   }
+  if (d.reply !== undefined) {
+    const parent = sent[Number(d.reply)]
+    if (parent) openComposer({ path: parent.path, side: parent.side, start: parent.start, line: parent.line, replyTo: parent.id })
+  }
   if (d.dismiss) {
-    const [comment] = sent.splice(Number(d.dismiss), 1)
+    const root = sent[Number(d.dismiss)]
+    const gone = new Set(threadsOf(sent).find(chain => chain[0] === root)?.map(c => c.id))
+    sent = sent.filter(c => c !== root && !(c.id && gone.has(c.id)))
     store(`sent:${selected}`, sent.length ? sent : undefined)
-    if (comment) rerenderFile(comment.path)
+    if (comments.some(c => gone.has(c.replyTo)) || composers.some(c => gone.has(c.replyTo))) {
+      comments = comments.filter(c => !gone.has(c.replyTo))
+      composers = composers.filter(c => !gone.has(c.replyTo))
+      persistComments()
+      saveDraft()
+      renderHeader()
+    }
+    if (root) rerenderFile(root.path)
     renderCommentViews()
     renderDescriptionThreads()
   }
@@ -1978,7 +2037,7 @@ document.addEventListener('mousedown', event => {
   if (!cell) return
   event.preventDefault()
   const at = cellTarget(cell)
-  const last = composers.at(-1)
+  const last = lastBox()
   const extend = event.shiftKey && last && last.path === at.path && last.side === at.side
   if (extend) composers = composers.filter(c => c !== last)
   drag = { path: at.path, side: at.side, start: extend ? last.start : at.line, end: at.line, text: extend ? last.text : undefined }
