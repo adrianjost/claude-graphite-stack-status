@@ -134,6 +134,17 @@ async function diffFor(query) {
   return { branch: row.branch, parent, base, head, diff, pending: mode === 'all' ? pending : '', commits, isCurrent, dirty, mode, includeWorktree, draft }
 }
 
+async function changesFor(query) {
+  const from = query.get('from') ?? ''
+  const to = query.get('to') ?? ''
+  const path = query.get('path') ?? ''
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(from) || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(to)) return { error: 'bad range' }
+  if (path.startsWith('/') || path.split('/').includes('..')) return { error: 'bad path' }
+  const ws = query.get('ws') === '1' ? [] : ['-w']
+  const result = await git(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '-M', ...ws, from, to, ...(path ? ['--', path] : [])])
+  return result.ok ? { diff: result.stdout } : { error: 'unavailable' }
+}
+
 async function fileFor(query) {
   const row = (state.rows ?? []).find(r => r.branch === query.get('branch'))
   const path = query.get('path') ?? ''
@@ -175,6 +186,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, state)
     }
     if (url.pathname === '/diff') return send(res, 200, await diffFor(url.searchParams))
+    if (url.pathname === '/changes') return send(res, 200, await changesFor(url.searchParams))
     if (url.pathname === '/file') return send(res, 200, await fileFor(url.searchParams))
     if (url.pathname === '/action' && req.method === 'POST') {
       if (actions.length >= 20) return send(res, 429, { error: 'busy' })

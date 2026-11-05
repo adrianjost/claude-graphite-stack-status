@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface as Engine, Register, Timer } from 'claude-code'
 
-import type { CiState, Issue, Lane, LinkTarget, PrInfo, StackRow, StackSnapshot, WaitingPrompt } from '../types'
+import type { CiState, Issue, Lane, LinkTarget, PrInfo, ReviewReply, StackRow, StackSnapshot, UpdateInfo, WaitingPrompt } from '../types'
 
 const POLL_MS = 60_000
 const POLL_BUSY_MS = 30_000
@@ -18,6 +18,12 @@ const linkTarget = atom({ plugin: 'graphite-stack', key: 'linkTarget' } as const
 const working = atom({ plugin: 'graphite-stack', key: 'working' } as const, null as string | null)
 const reviewUrl = atom({ plugin: 'graphite-stack', key: 'reviewUrl' } as const, null as string | null)
 const waitingPrompts = atom({ plugin: 'graphite-stack', key: 'waitingPrompts' } as const, [] as WaitingPrompt[])
+const reviewReplies = atom({ plugin: 'graphite-stack', key: 'reviewReplies' } as const, {} as Record<string, ReviewReply>)
+const updateInfo = atom({ plugin: 'graphite-stack', key: 'updateInfo' } as const, null as UpdateInfo | null)
+const REPLY_TOOL = 'mcp__graphite-stack__review_reply'
+const REPLY_LINE = `When done, call ${REPLY_TOOL} once: refs you addressed in \`fixed\`; a one-sentence reply only for questions or anything you didn't do.`
+const MAX_REPLIES = 200
+const MAX_REFS = 400
 const REVIEW_PORT_BASE = 47100
 const REVIEW_PORTS = 1800
 const STACK_ACTION_TIMEOUT_MS = 3 * 60_000
@@ -726,6 +732,7 @@ async function pushReview($: Engine) {
         threads: threads?.cache[row.pr.number]?.threads ?? [],
       },
     })),
+    replies: await read($, reviewReplies),
   }
   try {
     await $.http.fetch(`http://127.0.0.1:${server.port}/state?t=${server.token}`, {
@@ -742,6 +749,7 @@ type ReviewComment = {
   kind?: 'description' | 'thread'
   thread?: { id: string; url: string }
   quote?: string
+  id?: string | number
   branch?: string
   base?: string
   path: string
@@ -872,6 +880,16 @@ function indent(text: string) {
   return text.split('\n').map(line => `   ${line}`).join('\n').trim()
 }
 
+let refSeq = 0
+const refTargets = new Map<string, { branch: string; id: string }>()
+
+function newRef(branch: string, comment: ReviewComment) {
+  const ref = `c${++refSeq}`
+  if (comment.id !== undefined) refTargets.set(ref, { branch, id: String(comment.id) })
+  if (refTargets.size > MAX_REFS) refTargets.delete(refTargets.keys().next().value!)
+  return ref
+}
+
 function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
   const where = (c: ReviewComment) =>
     `\`${c.path}:${c.start && c.start !== c.line ? `${c.start}-${c.line}` : c.line}\`` +
@@ -882,9 +900,16 @@ function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
   const pr = stackOrder(rows).find(row => row.branch === action.branch)?.pr
   const subject = layerLabel(rows, action.branch)
   const single = mine.length === 1 && !action.summary ? mine[0] : undefined
+  const refs: string[] = []
+  const withRefs = mine.some(c => !c.thread)
+  const mark = (c: ReviewComment, i: number) => {
+    if (!withRefs) return `${i + 1}. `
+    refs.push(newRef(action.branch, c))
+    return `[${refs.at(-1)}] `
+  }
   if (single?.thread) {
     const { id, url } = single.thread
-    return `GitHub review thread on ${subject}, ${where(single)} (${url}, thread id \`${id}\`):\n\n${single.text}${quoteLines(single.code)}\n\nPlease ${THREAD_TAIL.replace('<thread id>', id)}`
+    return { refs, text: `GitHub review thread on ${subject}, ${where(single)} (${url}, thread id \`${id}\`):\n\n${single.text}${quoteLines(single.code)}\n\nPlease ${THREAD_TAIL.replace('<thread id>', id)}` }
   }
   if (single) {
     const target = single.kind === 'description' ? (pr ? 'the PR description' : 'the commit message') : where(single)
@@ -894,24 +919,24 @@ function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
           ? ' Apply it by editing the PR description on GitHub.'
           : " Apply it to the branch's commit message."
         : ''
-    return `Review comment on ${subject}, ${target}: ${single.text}${quoteLines(single.kind === 'description' ? single.quote : single.code)}${apply ? `\n\n${apply.trim()}` : ''}`
+    return { refs, text: `Review comment on ${subject}, ${mark(single, 0)}${target}: ${single.text}${quoteLines(single.kind === 'description' ? single.quote : single.code)}${apply ? `\n\n${apply.trim()}` : ''}` }
   }
   const base = action.compareTo ?? comments.find(c => c.base)?.base
-  return [
+  const text = [
     `Review feedback on ${subject}` +
       (base ? ` vs \`${base}\`` : '') +
       (action.includesUncommitted ? ' including uncommitted changes' : '') +
       ':',
     action.summary ? `\n${action.summary}` : '',
     notes.length
-      ? `\nOn the ${pr ? 'PR description' : 'commit message (the future PR description)'}:\n${notes.map((c, i) => `${i + 1}. ${c.text}${quoteLines(c.quote)}`).join('\n')}`
+      ? `\nOn the ${pr ? 'PR description' : 'commit message (the future PR description)'}:\n${notes.map((c, i) => `${mark(c, i)}${c.text}${quoteLines(c.quote)}`).join('\n')}`
       : '',
     comments.length
       ? `\n${notes.length ? 'On the code:\n' : ''}${comments
           .map((c, i) =>
             c.thread
-              ? `${i + 1}. ${where(c)}: GitHub review thread ${c.thread.url} (thread id \`${c.thread.id}\`)\n   ${indent(c.text)}${quoteLines(c.code)}`
-              : `${i + 1}. ${where(c)}: ${c.text}${quoteLines(c.code)}`,
+              ? `${mark(c, i)}${where(c)}: GitHub review thread ${c.thread.url} (thread id \`${c.thread.id}\`)\n   ${indent(c.text)}${quoteLines(c.code)}`
+              : `${mark(c, i)}${where(c)}: ${c.text}${quoteLines(c.code)}`,
           )
           .join('\n')}`
       : '',
@@ -921,19 +946,112 @@ function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
   ]
     .filter(Boolean)
     .join('\n')
+  return { refs, text }
+}
+
+type Tracked = { from: Record<string, string>; refs: string[] }
+let tracked: Tracked | undefined
+
+async function snap($: Engine, branch: string) {
+  try {
+    const cwd = await $.session.cwd()
+    const git = (...args: string[]) => $.process.run(['git', ...args], { cwd, timeoutMs: 10_000 })
+    const head = await git('rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`)
+    const sha = head.exitCode === 0 ? head.stdout.trim() : ''
+    if (!sha) return undefined
+    if ((await git('symbolic-ref', '--short', '-q', 'HEAD')).stdout.trim() !== branch) return sha
+    const index = (await git('rev-parse', '--path-format=absolute', '--git-path', 'graphite-review-index')).stdout.trim()
+    if (!index) return sha
+    const step = (...args: string[]) => $.process.run(['git', ...args], { cwd, env: { GIT_INDEX_FILE: index }, timeoutMs: 20_000 })
+    if ((await step('read-tree', sha)).exitCode !== 0 || (await step('add', '-A')).exitCode !== 0) return sha
+    return (await step('write-tree')).stdout.trim() || sha
+  } catch {
+    return undefined
+  }
+}
+
+async function sameTree($: Engine, a: string, b: string) {
+  try {
+    const cwd = await $.session.cwd()
+    const [x, y] = await Promise.all([a, b].map(sha => $.process.run(['git', 'rev-parse', `${sha}^{tree}`], { cwd, timeoutMs: 10_000 })))
+    return x!.exitCode === 0 && y!.exitCode === 0 && x!.stdout.trim() === y!.stdout.trim()
+  } catch {
+    return false
+  }
+}
+
+async function beginTrack($: Engine, refs: string[]) {
+  const from = tracked?.from ?? {}
+  for (const branch of new Set(refs.flatMap(ref => refTargets.get(ref)?.branch ?? []))) {
+    if (from[branch]) continue
+    const sha = await snap($, branch)
+    if (sha) from[branch] = sha
+  }
+  tracked = { from, refs: [...(tracked?.refs ?? []), ...refs] }
+}
+
+async function endTrack($: Engine) {
+  const done = tracked
+  tracked = undefined
+  if (!done) return
+  const changes: Record<string, { from: string; to: string }> = {}
+  for (const [branch, from] of Object.entries(done.from)) {
+    const to = await snap($, branch)
+    if (to && to !== from && !(await sameTree($, from, to))) changes[branch] = { from, to }
+  }
+  const touched = done.refs.flatMap(ref => {
+    const target = refTargets.get(ref)
+    const change = target && changes[target.branch]
+    return target && change ? [[target.id, change] as const] : []
+  })
+  if (!touched.length) return
+  await update($, reviewReplies, map => trimReplies({ ...map, ...Object.fromEntries(touched.map(([id, change]) => [id, { ...map[id], ...change }])) }))
+  schedulePushReview($)
+}
+
+function trimReplies(map: Record<string, ReviewReply>) {
+  const keys = Object.keys(map)
+  for (const key of keys.slice(0, Math.max(0, keys.length - MAX_REPLIES))) delete map[key]
+  return map
+}
+
+async function answerReview($: Engine, input: { fixed?: unknown; replies?: unknown }) {
+  const entries: [string, ReviewReply][] = []
+  for (const ref of Array.isArray(input.fixed) ? input.fixed : []) {
+    const target = typeof ref === 'string' ? refTargets.get(ref) : undefined
+    if (target) entries.push([target.id, { status: 'fixed', text: undefined }])
+  }
+  for (const item of Array.isArray(input.replies) ? input.replies : []) {
+    const { ref, text } = (item ?? {}) as { ref?: unknown; text?: unknown }
+    const target = typeof ref === 'string' ? refTargets.get(ref) : undefined
+    if (target && typeof text === 'string' && text.trim()) entries.push([target.id, { status: 'replied', text: text.trim().slice(0, 1000) }])
+  }
+  if (!entries.length) return { deny: 'No matching refs: use the refs from the review message, like c1.' }
+  await update($, reviewReplies, map => {
+    const next = { ...map }
+    for (const [id, entry] of entries) next[id] = { ...next[id], ...entry }
+    return trimReplies(next)
+  })
+  schedulePushReview($)
+  return { result: 'ok' }
 }
 
 let actionLoop = 0
 let turnRunning = false
-function submitPrompt($: Engine, text: string) {
+async function submitPrompt($: Engine, text: string, parts: { refs?: string[] }[] = []) {
+  const refs = parts.flatMap(part => part.refs ?? [])
+  if (refs.length) {
+    text += `\n\n${REPLY_LINE}`
+    await beginTrack($, refs)
+  }
   void $.prompt
     .submit({ text, asUser: true })
     .catch(error => $.ui.toast(`Couldn't hand this to Claude: ${String(error)}`, { timeoutMs: 10_000 }))
 }
 
-async function queuePrompt($: Engine, text: string, branch?: string) {
-  if (turnRunning) await update($, waitingPrompts, list => [...list, { text, branch }])
-  else submitPrompt($, text)
+async function queuePrompt($: Engine, text: string, branch?: string, refs?: string[]) {
+  if (turnRunning) await update($, waitingPrompts, list => [...list, { text, branch, refs }])
+  else await submitPrompt($, text, [{ refs }])
 }
 
 async function flushPrompts($: Engine) {
@@ -941,12 +1059,13 @@ async function flushPrompts($: Engine) {
   if (!batch.length) return
   await update($, waitingPrompts, () => [])
   const branches = new Set(batch.flatMap(entry => (entry.branch ? [entry.branch] : [])))
-  submitPrompt(
+  await submitPrompt(
     $,
     batch.length === 1
       ? batch[0]!.text
       : `${batch.length} requests from the review page came in while you were busy. Handle them in order${branches.size > 1 ? ', addressing each review point on its branch' : ''}:\n\n` +
           batch.map((entry, i) => `## ${i + 1}.\n\n${entry.text}`).join('\n\n'),
+    batch,
   )
 }
 
@@ -999,7 +1118,8 @@ async function pollReviewActions($: Engine, port: number) {
         requestRefresh($, 'force')
       }
       if (!handled.has(action.id) && action.type === 'review' && (action.comments.length || action.summary)) {
-        await queuePrompt($, reviewPrompt(action, (await read($, snapshot)).rows), action.branch)
+        const { text, refs } = reviewPrompt(action, (await read($, snapshot)).rows)
+        await queuePrompt($, text, action.branch, refs)
         results[action.id] = { ok: true, data: { queued: turnRunning } }
       }
       handled.add(action.id)
@@ -1011,6 +1131,73 @@ async function pollReviewActions($: Engine, port: number) {
         .catch(() => undefined)
     }
   }
+}
+
+const RELEASES = 'https://api.github.com/repos/adrianjost/claude-graphite-stack-status/releases/latest'
+const UPDATE_COMMANDS = [
+  ['claude', 'plugin', 'marketplace', 'update', 'adrianjost'],
+  ['claude', 'plugin', 'update', 'graphite-stack@adrianjost'],
+]
+const DAY_MS = 24 * 60 * 60_000
+let updateTimer: Timer | undefined
+
+function isNewer(a: string, b: string) {
+  const [x, y] = [a, b].map(v => v.split('.').map(n => parseInt(n, 10) || 0))
+  for (let i = 0; i < 3; i++) if (x![i] !== y![i]) return (x![i] ?? 0) > (y![i] ?? 0)
+  return false
+}
+
+async function checkUpdate($: Engine) {
+  updateTimer?.cancel()
+  updateTimer = $.clock.after(6 * 60 * 60_000, () => void checkUpdate($))
+  try {
+    const current = (JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)) as { version?: string }).version
+    if (!current) return
+    let latest = (await $.store.get('latestRelease')) as { at: number; version: string; url: string } | undefined
+    if (!latest || Date.now() - latest.at > DAY_MS) {
+      const response = await $.http.fetch(RELEASES, { headers: { accept: 'application/vnd.github+json' } })
+      const release = response.ok ? (JSON.parse(response.text) as { tag_name?: string; html_url?: string }) : {}
+      const version = release.tag_name?.replace(/^v/, '')
+      latest = { at: Date.now(), version: version ?? latest?.version ?? current, url: release.html_url ?? latest?.url ?? '' }
+      await $.store.set('latestRelease', latest)
+    }
+    const available = isNewer(latest.version, current) && (await $.store.get('dismissedRelease')) !== latest.version
+    await update($, updateInfo, info => (available ? { version: latest.version, url: latest.url, state: info?.version === latest.version ? info.state : 'available' } : null))
+    if (available && (await $.store.get('notifiedRelease')) !== latest.version) {
+      await $.store.set('notifiedRelease', latest.version)
+      $.ui.toast(`graphite-stack ${latest.version} is available. Update it from the stack band.`, { timeoutMs: 10_000 })
+    }
+  } catch (error) {
+    $.ui.log(`update check failed: ${String(error)}`, { to: 'debug' })
+  }
+}
+
+async function installUpdate($: Engine) {
+  const info = await read($, updateInfo)
+  if (!info || info.state === 'updating') return
+  await update($, updateInfo, i => i && { ...i, state: 'updating' as const })
+  const cwd = await $.session.cwd()
+  let ok = true
+  for (const argv of UPDATE_COMMANDS) {
+    const result = await $.process.run(argv, { cwd, timeoutMs: 180_000 }).catch(() => undefined)
+    if (result?.exitCode !== 0) {
+      ok = false
+      break
+    }
+  }
+  if (ok) {
+    await update($, updateInfo, i => i && { ...i, state: 'installed' as const })
+    $.ui.toast(`graphite-stack ${info.version} is installed. Restart Claude Code to use it.`, { timeoutMs: 15_000 })
+    return
+  }
+  await update($, updateInfo, i => i && { ...i, state: 'available' as const })
+  await queuePrompt($, `Update the graphite-stack plugin to ${info.version}: run \`${UPDATE_COMMANDS.map(c => c.join(' ')).join(' && ')}\` and tell me to restart Claude Code afterwards. Don't change anything else.`)
+}
+
+async function dismissUpdate($: Engine) {
+  const info = await read($, updateInfo)
+  if (info) await $.store.set('dismissedRelease', info.version)
+  await update($, updateInfo, () => null)
 }
 
 async function openReview($: Engine, branch?: string) {
@@ -1396,10 +1583,29 @@ export const register: Register = on => {
     const started = await next(e)
     const stored = await $.store.get('linkTarget')
     if (stored === 'github' || stored === 'graphite') await update($, linkTarget, () => stored)
+    void checkUpdate($)
     await $.command.register({
       name: 'stack',
       description: 'Show or hide the Graphite stack above the prompt',
     })
+    await $.tool
+      .register({
+        name: 'review_reply',
+        description:
+          'Report on the review comments you handled (refs like c1). List simply addressed refs in `fixed`; add a reply only when the comment asked a question or you didn\'t do what it asked, in one short sentence.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            fixed: { type: 'array', items: { type: 'string' } },
+            replies: {
+              type: 'array',
+              items: { type: 'object', properties: { ref: { type: 'string' }, text: { type: 'string' } }, required: ['ref', 'text'] },
+            },
+          },
+        },
+        isDeferred: false,
+      })
+      .catch(error => $.ui.log(`review_reply tool not registered: ${String(error)}`, { to: 'debug' }))
     void refresh($, 'github').then(async () => {
       void schedulePoll($)
       if ((await read($, snapshot)).rows.length > 1) void startReview($)
@@ -1424,17 +1630,22 @@ export const register: Register = on => {
     const done = await next(e)
     if (!e.agentId) {
       turnRunning = false
+      await endTrack($)
       await flushPrompts($)
     }
     return done
   })
 
+  on('tool.call', { tool: REPLY_TOOL }, async ($, e) => answerReview($, e))
+
   on('turn.abort', async ($, e, next) => {
     const done = await next(e)
     turnRunning = false
+    await endTrack($)
     await flushPrompts($)
     return done
   })
+
 
   on('session.attach', async ($, e, next) => {
     if (e.surface !== 'terminal') {
@@ -1486,6 +1697,7 @@ export const register: Register = on => {
       ...s.rows.map(row => (row.diff ? diffText(row.diff).join(' ').length : 0)),
     )
     const layout = metaLayout(prs.flatMap(row => (row.pr ? [row.pr] : [])))
+    const newVersion = await read($, updateInfo)
     const summary = [
       `${prs.length} PR${prs.length === 1 ? '' : 's'}`,
       failing ? `${failing} failing` : '',
@@ -1495,6 +1707,25 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column">
+        {newVersion ? (
+          <Box key="update" flexDirection="row" alignItems="center" gap={1} marginBottom={1}>
+            <Text color="suggestion">
+              {newVersion.state === 'installed'
+                ? `graphite-stack ${newVersion.version} is installed. Restart Claude Code to use it.`
+                : `graphite-stack ${newVersion.version} is available.`}
+            </Text>
+            {newVersion.url ? <Link key="notes" href={newVersion.url} label="Release notes" /> : null}
+            <Box flexGrow={1} />
+            {newVersion.state === 'installed' ? null : (
+              <Button
+                key="install"
+                label={newVersion.state === 'updating' ? 'Updating…' : 'Update'}
+                onPress={() => void installUpdate($)}
+              />
+            )}
+            <Button key="dismiss" plain dimColor label="Dismiss" onPress={() => void dismissUpdate($)} />
+          </Box>
+        ) : null}
         <Box flexDirection="row" alignItems="center" gap={1} marginBottom={1}>
           <Text bold>Graphite stack</Text>
           <Text dimColor>{summary}</Text>

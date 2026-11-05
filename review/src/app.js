@@ -105,6 +105,9 @@ const api = (path, init) =>
     return res.json()
   })
 
+const newId = () => Math.random().toString(36).slice(2, 8) + Date.now().toString(36)
+const ensureIds = list => list.forEach(c => (c.id ??= newId()))
+
 const stackRows = () => state.rows.filter(row => !row.isTrunk)
 const selectedRow = () => state.rows.find(row => row.branch === selected)
 const viewedKey = file => `viewed:${selected}:${file.path}:${file.hash}`
@@ -420,6 +423,92 @@ function strandedComments(path, isRendered) {
   return `${html}</div>`
 }
 
+const openChanges = new Set()
+const changeViews = new Map()
+const changesKey = c => `${c.answer.from}..${c.answer.to}|${c.kind ? '' : c.path}|${prefs.whitespace ? 1 : 0}`
+
+const sentClass = c => `comment sent${c.answer ? ' answered' : ''}`
+
+function answerBadge(c) {
+  const status = c.answer?.status
+  return status ? `<span class="badge answered">${status === 'fixed' ? 'Addressed' : 'Reply'}</span>` : ''
+}
+
+function changesHtml(diff) {
+  const list = parseFiles(diff)
+  if (!list.length) return '<div class="placeholder">No file changes.</div>'
+  return list
+    .slice(0, 20)
+    .map(file => {
+      const head = `<div class="changes-file"><span class="path">${pathHtml(file.path)}</span><span class="stat"><span class="add">+${file.added}</span> <span class="del">−${file.removed}</span></span></div>`
+      if (file.binary) return `${head}<div class="placeholder">Binary file not shown</div>`
+      if (file.isHeavy) return `${head}<div class="placeholder">Large diff not shown</div>`
+      const rows = file.hunks
+        .map(
+          hunk =>
+            hunkRow(false, null, `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@ ${hunk.heading}`) +
+            prepareLines(numberLines(hunk), file.language)
+              .map(line => `<tr class="${line.type}"><td class="ln">${line.old ?? ''}</td><td class="ln">${line.new ?? ''}</td><td class="code">${line.html ?? ''}</td></tr>`)
+              .join(''),
+        )
+        .join('')
+      return `${head}<table class="diff unified"><colgroup><col class="num"><col class="num"><col></colgroup><tbody>${rows}</tbody></table>`
+    })
+    .join('')
+}
+
+function answerBlock(c) {
+  const a = c.answer
+  if (!a) return ''
+  const id = String(c.id)
+  const open = openChanges.has(id)
+  return `${a.text ? `<div class="claude-reply"><strong>Claude</strong><div>${esc(a.text)}</div></div>` : ''}${
+    a.from && a.to
+      ? `<div class="changes${open ? ' open' : ''}"><button class="changes-toggle" data-changes="${esc(id)}">${ICONS.chevron}Changes</button>${
+          open ? `<div class="changes-body">${changeViews.get(changesKey(c)) ?? '<div class="placeholder">Loading…</div>'}</div>` : ''
+        }</div>`
+      : ''
+  }`
+}
+
+function refreshAnswer(comment) {
+  if (comment.kind === 'description') renderDescriptionThreads()
+  else rerenderFile(comment.path)
+}
+
+async function toggleChanges(id) {
+  const comment = sent.find(c => String(c.id) === id)
+  if (!comment?.answer?.from || !comment.answer.to) return
+  if (!openChanges.delete(id)) openChanges.add(id)
+  refreshAnswer(comment)
+  const key = changesKey(comment)
+  if (!openChanges.has(id) || changeViews.has(key)) return
+  const params = new URLSearchParams({ from: comment.answer.from, to: comment.answer.to, ws: prefs.whitespace ? '1' : '0' })
+  if (!comment.kind) params.set('path', comment.path)
+  const result = await api(`/changes?${params}`).catch(() => ({ error: 'unreachable' }))
+  changeViews.set(key, result.error ? '<div class="placeholder">These changes are no longer available.</div>' : changesHtml(result.diff ?? ''))
+  refreshAnswer(comment)
+}
+
+function applyReplies() {
+  const replies = state.replies ?? {}
+  let changed = false
+  for (const row of stackRows()) {
+    const list = row.branch === selected ? sent : stored(`sent:${row.branch}`, [])
+    let dirty = false
+    for (const c of list) {
+      const next = c.id === undefined ? undefined : replies[String(c.id)]
+      if (next && JSON.stringify(next) !== JSON.stringify(c.answer)) {
+        c.answer = next
+        dirty = true
+      }
+    }
+    if (dirty) store(`sent:${row.branch}`, list)
+    changed ||= dirty
+  }
+  return changed
+}
+
 const threadList = () => selectedRow()?.pr?.threads ?? []
 const openResolved = new Set()
 const threadErrors = new Map()
@@ -431,6 +520,7 @@ function threadCard(thread) {
   const first = thread.comments[0]
   const inReview = comments.some(c => c.thread?.id === thread.id)
   const wasSent = sent.some(c => c.thread?.id === thread.id)
+  const answered = sent.findLast(c => c.thread?.id === thread.id && c.answer)
   const shown = !thread.resolved || openResolved.has(thread.id)
   const error = threadErrors.get(thread.id)
   const id = `data-thread="${esc(thread.id)}"`
@@ -453,10 +543,11 @@ function threadCard(thread) {
   return `<div class="comment gh${thread.resolved ? ' resolved' : ''}" ${id}>
     <div class="comment-head">${avatar({ avatarUrl: first?.avatar })}<strong>${esc(first?.author ?? '')}</strong><span class="badge gh">GitHub</span>${
       thread.outdated ? '<span class="badge">Outdated</span>' : ''
-    }${thread.resolved ? '<span class="badge sent">Resolved</span>' : ''}${!thread.resolved && wasSent && !inReview ? '<span class="badge sent">Sent to Claude</span>' : ''}${
+    }${thread.resolved ? '<span class="badge sent">Resolved</span>' : ''}${!thread.resolved && wasSent && !inReview ? '<span class="badge sent">Sent to Claude</span>' : ''}${answered ? answerBadge(answered) : ''}${
       inReview ? '<span class="badge pending">In review</span>' : ''
     }<span>${esc(timeAgo(Date.parse(first?.createdAt)))}</span><span>on ${rangeLabel({ start: thread.start, line: threadLine(thread) })}</span><span class="spacer"></span>${buttons}</div>
     ${shown ? `<div class="gh-thread">${replies}</div>` : ''}
+    ${answered ? answerBlock(answered) : ''}
     ${error ? `<div class="thread-error">${esc(error)}</div>` : ''}</div>`
 }
 
@@ -490,10 +581,10 @@ function threadRows(path, targets, colspan) {
         const index = sent.indexOf(comment)
         const outdated = codeAt(comment) !== (comment.code ?? '')
         html += row(
-          `<div class="comment sent">
-          <div class="comment-head"><strong>You</strong><span class="badge sent">Sent to Claude</span>${outdated ? '<span class="badge">Outdated</span>' : ''}<span>${esc(timeAgo(comment.sentAt))}</span><span class="spacer"></span>
+          `<div class="${sentClass(comment)}">
+          <div class="comment-head"><strong>You</strong><span class="badge sent">Sent to Claude</span>${answerBadge(comment)}${outdated ? '<span class="badge">Outdated</span>' : ''}<span>${esc(timeAgo(comment.sentAt))}</span><span class="spacer"></span>
             <button class="btn invisible" data-dismiss="${index}">Dismiss</button></div>
-          <div class="comment-body">${esc(comment.text)}</div></div>`,
+          <div class="comment-body">${esc(comment.text)}</div>${answerBlock(comment)}</div>`,
           target.side,
         )
       }
@@ -775,9 +866,9 @@ function renderDescriptionThreads() {
   if (prefs.showSent) {
     sent.forEach((c, index) => {
       if (c.kind !== 'description') return
-      html += `<div class="comment sent"><div class="comment-head"><strong>You</strong><span class="badge sent">Sent to Claude</span><span>${esc(timeAgo(c.sentAt))}</span><span class="spacer"></span>
+      html += `<div class="${sentClass(c)}"><div class="comment-head"><strong>You</strong><span class="badge sent">Sent to Claude</span>${answerBadge(c)}<span>${esc(timeAgo(c.sentAt))}</span><span class="spacer"></span>
         <button class="btn invisible" data-dismiss="${index}">Dismiss</button></div>
-        <div class="comment-body">${quote(c.quote)}${esc(c.text)}</div></div>`
+        <div class="comment-body">${quote(c.quote)}${esc(c.text)}</div>${answerBlock(c)}</div>`
     })
   }
   if (describing) {
@@ -1100,7 +1191,7 @@ function commentItems(list, kind) {
         }</code>
           ${
             kind === 'sent'
-              ? `<span class="muted">${esc(timeAgo(comment.sentAt))}</span>`
+              ? `${answerBadge(comment)}<span class="muted">${esc(timeAgo(comment.sentAt))}</span>`
               : `<button class="btn invisible delete-item" data-remove-at="${jumps.length - 1}" title="Delete this comment">Delete</button>`
           }</div>
         <div class="text">${esc(comment.text)}</div></div>`
@@ -1216,6 +1307,7 @@ function saveComposer(composer) {
 }
 
 async function deliver(list) {
+  ensureIds(list)
   const { id } = await api('/action', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -1444,6 +1536,7 @@ async function sendReview() {
     }, ms) && (button.textContent = text)
   button.disabled = true
   button.textContent = 'Sending…'
+  ensureIds(pendingAll)
   let id
   try {
     ;({ id } = await api('/action', {
@@ -1693,11 +1786,12 @@ document.addEventListener('click', event => {
   const head = t.closest('.file-head')
   const headToggle =
     head && !t.closest('button, label, input, a') && window.getSelection()?.isCollapsed !== false ? head.querySelector('[data-collapse]') : null
-  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-jump],[data-describe-edit],[data-send-now],[data-remove-at],[data-thread-act]')
+  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-jump],[data-describe-edit],[data-send-now],[data-remove-at],[data-thread-act],[data-changes]')
   if (!t.closest('#submit') && !t.closest('[data-act="review"]')) $('#submit').hidden = true
   if (!el) return
   const d = el.dataset
   if (d.threadAct) return threadAct(el)
+  if (d.changes) return toggleChanges(d.changes)
   if (d.branch !== undefined && !el.classList.contains('trunk')) select(d.branch)
   if (d.nav) navigate(Number(d.nav))
   if (d.format) setPref('format', d.format)
@@ -1959,6 +2053,7 @@ async function poll() {
         if (fallback) select(fallback.branch)
       }
       renderStack()
+      if (applyReplies() && renderedKey) composers.length ? renderCommentViews() : renderAll()
       const threadsChanged = JSON.stringify(selectedRow()?.pr?.threads) !== threadsWere
       if (!composers.length || !renderedKey) loadDiff(restarted).then(() => threadsChanged && !restarted && renderAll())
     } catch {

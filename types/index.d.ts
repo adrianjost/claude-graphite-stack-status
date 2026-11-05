@@ -1,6 +1,10 @@
 export type LinkTarget = 'github' | 'graphite'
 
-export type WaitingPrompt = string | { text: string; branch?: string }
+export type UpdateInfo = { version: string; url: string; state: 'available' | 'updating' | 'installed' }
+
+export type WaitingPrompt = string | { text: string; branch?: string; refs?: string[] }
+
+export type ReviewReply = { status?: 'fixed' | 'replied'; text?: string; from?: string; to?: string }
 
 export type Issue = {
   message: string
@@ -64,7 +68,10 @@ export type StackSnapshot = {
 }
 
 declare module 'claude-code' {
+  interface McpToolInputs {
+    'mcp__graphite-stack__review_reply': { fixed?: string[]; replies?: { ref: string; text: string }[] }
+  }
   interface PluginState {
-    'graphite-stack': { snapshot: StackSnapshot; isHidden: boolean; linkTarget: LinkTarget; working: string | null; reviewUrl: string | null; waitingPrompts: WaitingPrompt[] }
+    'graphite-stack': { snapshot: StackSnapshot; isHidden: boolean; linkTarget: LinkTarget; working: string | null; reviewUrl: string | null; waitingPrompts: WaitingPrompt[]; reviewReplies: Record<string, ReviewReply>; updateInfo: UpdateInfo | null }
   }
 }
