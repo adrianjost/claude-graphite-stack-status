@@ -15,6 +15,7 @@ const ICONS = {
   up: '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M3.47 7.78a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0l4.25 4.25a.751.751 0 0 1-.018 1.042.751.751 0 0 1-1.042.018L9 4.81v7.44a.75.75 0 0 1-1.5 0V4.81L4.53 7.78a.75.75 0 0 1-1.06 0Z"/></svg>',
   github: '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/></svg>',
   graphite: '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.2 13.9 4.6v6.8L8 14.8 2.1 11.4V4.6Z"/><path d="M8 4.6 10.95 6.3v3.4L8 11.4 5.05 9.7V6.3Z" fill="currentColor" stroke="none"/></svg>',
+  comment: '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M1 2.75C1 1.784 1.784 1 2.75 1h10.5c.966 0 1.75.784 1.75 1.75v7.5A1.75 1.75 0 0 1 13.25 12H9.06l-2.573 2.573A1.458 1.458 0 0 1 4 13.543V12H2.75A1.75 1.75 0 0 1 1 10.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h2a.75.75 0 0 1 .75.75v2.19l2.72-2.72a.749.749 0 0 1 .53-.22h4.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z"/></svg>',
   downArrow: '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M13.03 8.22a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L3.47 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018l2.97 2.97V3.75a.75.75 0 0 1 1.5 0v7.44l2.97-2.97a.75.75 0 0 1 1.06 0Z"/></svg>',
 }
 
@@ -380,7 +381,9 @@ const sameBox = (a, b) => sameTarget(a, b) && a.replyTo === b.replyTo
 const covers = (range, path, target) =>
   !!range && range.path === path && range.side === target.side && (range.start ?? range.line) <= target.line && target.line <= range.line
 
-const rangeLabel = c => (c.start && c.start !== c.line ? `lines ${c.start}–${c.line}` : `line ${c.line}`)
+const byPlace = (a, b) => a.path.localeCompare(b.path) || (a.line ?? 0) - (b.line ?? 0)
+const isFile = c => c.kind === 'file'
+const rangeLabel = c => (isFile(c) ? 'this file' : c.start && c.start !== c.line ? `lines ${c.start}–${c.line}` : `line ${c.line}`)
 
 function lnCell(path, line, number, extra = '', column = 'new') {
   if (number === undefined) return `<td class="ln ${extra}"></td>`
@@ -392,7 +395,7 @@ function lnCell(path, line, number, extra = '', column = 'new') {
 }
 
 let renderedTargets = new Set()
-const targetKey = t => `${t.path}|${t.side}|${t.line}`
+const targetKey = t => (isFile(t) ? `${t.path}|file` : `${t.path}|${t.side}|${t.line}`)
 const boxKey = t => (t.replyTo ? `${targetKey(t)}|${t.replyTo}` : targetKey(t))
 
 function pendingCard(comment, index, note = '') {
@@ -411,7 +414,7 @@ function composerBox(composer) {
   const reply = !!composer.replyTo
   return `<div class="composer" data-box="${esc(boxKey(composer))}">
     <textarea placeholder="${reply ? 'Reply to Claude…' : `Leave a comment for Claude on ${rangeLabel(composer)}…`}">${esc(composer.text ?? '')}</textarea>
-    <div class="actions">${composer.side === 'new' && !reply ? '<button class="btn invisible" data-act="suggest" title="Suggest a replacement for the selected lines">± Suggest change</button>' : ''}<span class="muted hint">⌘↵ to save · Esc to cancel</span>
+    <div class="actions">${composer.side === 'new' && !reply && !isFile(composer) ? '<button class="btn invisible" data-act="suggest" title="Suggest a replacement for the selected lines">± Suggest change</button>' : ''}<span class="muted hint">⌘↵ to save · Esc to cancel</span>
       <button class="btn" data-act="cancel">Cancel</button>
       <button class="btn" data-act="send-now" title="Send just this comment to Claude now, without the rest of the review">Send to Claude now</button>
       <button class="btn primary" data-act="save">${reply ? 'Add to review' : composer.existing ? 'Update comment' : 'Add comment'}</button></div>
@@ -422,7 +425,7 @@ function strandedComments(path, isRendered) {
   const stranded = comments
     .map((comment, index) => ({ comment, index }))
     .filter(({ comment }) => !comment.kind && comment.path === path && !isRendered(comment))
-  const composerStranded = composers.filter(c => c.path === path && !isRendered(c))
+  const composerStranded = composers.filter(c => c.path === path && !isFile(c) && !isRendered(c))
   if (!stranded.length && !composerStranded.length) return ''
   let html = `<div class="stranded"><div class="stranded-head">Comments on lines that are no longer in this diff</div>`
   for (const { comment, index } of stranded) {
@@ -435,7 +438,7 @@ function strandedComments(path, isRendered) {
 
 const openChanges = new Set()
 const changeViews = new Map()
-const changesKey = c => `${c.answer.from}..${c.answer.to}|${c.kind ? '' : c.path}|${prefs.whitespace ? 1 : 0}`
+const changesKey = c => `${c.answer.from}..${c.answer.to}|${c.kind && !isFile(c) ? '' : c.path}|${prefs.whitespace ? 1 : 0}`
 
 const hasAnswer = c => !!(c.answer?.status || c.answer?.from)
 const sentClass = c => `comment sent${hasAnswer(c) ? ' answered' : ''}`
@@ -464,7 +467,7 @@ function sentThread(chain) {
   const leaf = chain.at(-1)
   const draft = comments.find(c => c.replyTo === leaf.id)
   const box = composers.find(c => c.replyTo === leaf.id)
-  const outdated = codeAt(root) !== (root.code ?? '')
+  const outdated = !isFile(root) && codeAt(root) !== (root.code ?? '')
   const msgs = chain
     .map(
       c => `<div class="msg"><div class="comment-head"><strong>You</strong>${refTag(c)}<span class="badge sent">Sent to Claude</span>${answerBadge(c)}${c === root && outdated ? '<span class="badge">Outdated</span>' : ''}<span>${esc(timeAgo(c.sentAt))}</span><span class="spacer"></span>${
@@ -532,7 +535,7 @@ async function toggleChanges(id) {
   const key = changesKey(comment)
   if (!openChanges.has(id) || changeViews.has(key)) return
   const params = new URLSearchParams({ from: comment.answer.from, to: comment.answer.to, ws: prefs.whitespace ? '1' : '0' })
-  if (!comment.kind) params.set('path', comment.path)
+  if (!comment.kind || isFile(comment)) params.set('path', comment.path)
   const result = await api(`/changes?${params}`).catch(() => ({ error: 'unreachable' }))
   changeViews.set(key, result.error ? '<div class="placeholder">These changes are no longer available.</div>' : changesHtml(result.diff ?? ''))
   refreshAnswer(comment)
@@ -562,7 +565,7 @@ const openResolved = new Set()
 const threadErrors = new Map()
 let renderedThreads = new Set()
 const threadLine = t => t.line ?? t.originalLine ?? 1
-const isPlaced = t => !t.outdated && !!t.line
+const isPlaced = t => !t.file && !t.outdated && !!t.line
 
 function threadCard(thread) {
   const first = thread.comments[0]
@@ -593,7 +596,7 @@ function threadCard(thread) {
       thread.outdated ? '<span class="badge">Outdated</span>' : ''
     }${thread.resolved ? '<span class="badge sent">Resolved</span>' : ''}${!thread.resolved && wasSent && !inReview ? '<span class="badge sent">Sent to Claude</span>' : ''}${answered ? answerBadge(answered) : ''}${
       inReview ? '<span class="badge pending">In review</span>' : ''
-    }<span>${esc(timeAgo(Date.parse(first?.createdAt)))}</span><span>on ${rangeLabel({ start: thread.start, line: threadLine(thread) })}</span><span class="spacer"></span>${buttons}</div>
+    }<span>${esc(timeAgo(Date.parse(first?.createdAt)))}</span><span>on ${rangeLabel({ kind: thread.file ? 'file' : undefined, start: thread.start, line: threadLine(thread) })}</span><span class="spacer"></span>${buttons}</div>
     ${shown ? `<div class="gh-thread">${replies}</div>` : ''}
     ${noteBox(thread, inReview)}
     ${answered ? answerBlock(answered) : ''}
@@ -615,7 +618,7 @@ function noteBox(thread, inReview) {
 }
 
 function strandedThreads(path, isRendered, openOnly = false) {
-  const stranded = threadList().filter(t => t.path === path && !isRendered(t) && !(openOnly && t.resolved))
+  const stranded = threadList().filter(t => !t.file && t.path === path && !isRendered(t) && !(openOnly && t.resolved))
   if (!stranded.length) return ''
   return `<div class="stranded"><div class="stranded-head">GitHub threads on lines that are not in this diff</div>${stranded.map(threadCard).join('')}</div>`
 }
@@ -701,11 +704,31 @@ function hunkRow(split, expand, label, half = false) {
   return `<tr class="hunk">${expandCell}<td class="heading" colspan="${split ? 3 : 1}">${esc(label)}</td></tr>`
 }
 
+function fileComments(path, openOnly = false) {
+  const at = { path, kind: 'file' }
+  let html = ''
+  for (const thread of threadList().filter(t => t.file && t.path === path && !(openOnly && t.resolved))) {
+    renderedThreads.add(thread.id)
+    html += threadCard(thread)
+  }
+  for (const comment of comments.filter(c => isFile(c) && c.path === path)) {
+    if (comment.replyTo ? sent.some(c => c.id === comment.replyTo) : composerAt(at)) continue
+    html += pendingCard(comment, comments.indexOf(comment))
+  }
+  for (const chain of threadsOf(sent.filter(c => isFile(c) && c.path === path))) {
+    if (prefs.showSent || comments.some(c => c.replyTo === chain.at(-1).id) || composers.some(c => c.replyTo === chain.at(-1).id)) html += sentThread(chain)
+  }
+  const box = composerAt(at)
+  if (box) html += composerBox(box)
+  return html ? `<div class="file-comments">${html}</div>` : ''
+}
+
 function fileBody(file) {
   renderedTargets = new Set()
   renderedThreads = new Set()
+  const top = fileComments(file.path)
   const body = fileBodyInner(file)
-  return strandedComments(file.path, c => renderedTargets.has(targetKey(c))) + strandedThreads(file.path, t => renderedThreads.has(t.id)) + body
+  return top + strandedComments(file.path, c => renderedTargets.has(targetKey(c))) + strandedThreads(file.path, t => renderedThreads.has(t.id)) + body
 }
 
 function fileBodyInner(file) {
@@ -794,6 +817,7 @@ function fileCard(file) {
       ${pending.has(file.path) ? '<span class="badge pending" title="Has uncommitted changes">Uncommitted</span>' : ''}
       ${openThreadCount ? `<span class="badge gh" title="Unresolved GitHub review threads">${openThreadCount} open thread${openThreadCount === 1 ? '' : 's'}</span>` : ''}
       ${count ? `<span class="badge pending">${count} comment${count === 1 ? '' : 's'}</span>` : ''}
+      <button class="btn icon invisible" data-file-comment="${esc(file.path)}" title="Comment on this file">${ICONS.comment}</button>
       <label class="viewed-toggle"><input type="checkbox" data-viewed="${esc(file.path)}" ${viewed ? 'checked' : ''}>Viewed</label>
     </div>
     <div class="file-body">${closed ? '' : fileBody(file)}</div>
@@ -1121,13 +1145,13 @@ function renderDiff() {
   const paths = new Set(files.map(f => f.path))
   const gone = [
     ...new Set([
-      ...comments.filter(c => !c.kind && !paths.has(c.path)).map(c => c.path),
+      ...comments.filter(c => (!c.kind || isFile(c)) && !paths.has(c.path)).map(c => c.path),
       ...threadList().filter(t => !t.resolved && !paths.has(t.path)).map(t => t.path),
     ]),
   ]
   const orphans = gone
     .map(path => `<section class="file" data-file="${esc(path)}"><div class="file-head"><span class="path">${pathHtml(path)}</span><span class="badge">No longer changed</span></div>
-      <div class="file-body">${strandedComments(path, () => false)}${strandedThreads(path, () => false, true)}</div></section>`)
+      <div class="file-body">${fileComments(path, true)}${strandedComments(path, () => false)}${strandedThreads(path, () => false, true)}</div></section>`)
     .join('')
   $('#diff').innerHTML = orphans + (files.length
     ? files.map(fileCard).join('')
@@ -1247,7 +1271,9 @@ function commentItems(list, kind, followUps = new Map()) {
         <div class="where">${comment.kind === 'thread' ? '<span class="badge gh">GitHub</span>' : ''}<code>${
           comment.kind === 'description'
             ? 'PR description'
-            : `${esc(comment.path)}:${comment.start && comment.start !== comment.line ? `${comment.start}–${comment.line}` : comment.line}`
+            : isFile(comment) || comment.file
+              ? `${esc(comment.path)} (file)`
+              : `${esc(comment.path)}:${comment.start && comment.start !== comment.line ? `${comment.start}–${comment.line}` : comment.line}`
         }</code>
           ${
             kind === 'sent'
@@ -1317,6 +1343,7 @@ function jumpTo(target) {
 
 function openComposer(target) {
   const existing = comments.find(c => c.kind !== 'thread' && sameBox(c, target))
+  const file = isFile(target)
   const start = target.start ?? existing?.start ?? target.line
   const touched = new Set([target.path])
   composers = composers.filter(c => {
@@ -1324,7 +1351,7 @@ function openComposer(target) {
     if (!keep) touched.add(c.path)
     return keep
   })
-  const box = { path: target.path, side: target.side, start, line: target.line, text: target.text ?? existing?.text ?? '', existing: !!existing, ...(target.replyTo ? { replyTo: target.replyTo } : {}) }
+  const box = { path: target.path, ...(file ? { kind: 'file' } : { side: target.side, start, line: target.line }), text: target.text ?? existing?.text ?? '', existing: !!existing, ...(target.replyTo ? { replyTo: target.replyTo } : {}) }
   composers.push(box)
   touched.forEach(rerenderFile)
   const area = document.querySelector(`.composer[data-box="${CSS.escape(boxKey(box))}"] textarea`)
@@ -1334,6 +1361,7 @@ function openComposer(target) {
 }
 
 function codeAt(range) {
+  if (isFile(range)) return ''
   const file = files.find(f => f.path === range.path)
   const found = new Map()
   for (const hunk of file?.hunks ?? []) {
@@ -1353,11 +1381,11 @@ function codeAt(range) {
 function saveComposer(composer) {
   if (!composer) return
   const text = document.querySelector(`.composer[data-box="${CSS.escape(boxKey(composer))}"] textarea`)?.value.trim() ?? composer.text?.trim() ?? ''
-  const target = { path: composer.path, side: composer.side, line: composer.line }
+  const target = isFile(composer) ? { path: composer.path, kind: 'file' } : { path: composer.path, side: composer.side, line: composer.line }
   const range = composer.start !== composer.line ? { ...target, start: composer.start } : target
   comments = comments.filter(c => c.kind === 'thread' || !sameBox(c, composer))
-  if (text) comments.push(composer.replyTo ? { ...range, text, base: current?.parent, replyTo: composer.replyTo, ...followUpMeta(composer.replyTo) } : { ...range, text, code: codeAt(range), base: current?.parent })
-  comments.sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line)
+  if (text) comments.push(composer.replyTo ? { ...range, text, base: current?.parent, replyTo: composer.replyTo, ...followUpMeta(composer.replyTo) } : { ...range, text, ...(isFile(range) ? {} : { code: codeAt(range) }), base: current?.parent })
+  comments.sort(byPlace)
   composers = composers.filter(c => c !== composer)
   persistComments()
   rerenderFile(target.path)
@@ -1425,13 +1453,14 @@ async function sendComposerNow(button, composer) {
 }
 
 function threadComment(thread, note = '') {
-  const range = { path: thread.path, side: thread.side, ...(thread.start ? { start: thread.start } : {}), line: threadLine(thread) }
+  const range = thread.file ? { path: thread.path } : { path: thread.path, side: thread.side, ...(thread.start ? { start: thread.start } : {}), line: threadLine(thread) }
   return {
     kind: 'thread',
+    ...(thread.file ? { file: true } : {}),
     ...range,
     text: thread.comments.map(c => `@${c.author}: ${c.body.trim().slice(0, 2000)}`).join('\n\n'),
     ...(note ? { note } : {}),
-    code: thread.outdated ? '' : codeAt(range),
+    code: thread.outdated || thread.file ? '' : codeAt(range),
     base: current?.parent,
     thread: { id: thread.id, url: thread.comments[0]?.url ?? '' },
   }
@@ -1496,7 +1525,7 @@ function threadAct(button) {
   }
   if (act === 'note-add') {
     const note = noteAt(thread.id)?.text.trim() ?? ''
-    comments = [...comments.filter(c => c.thread?.id !== thread.id), threadComment(thread, note)].sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line)
+    comments = [...comments.filter(c => c.thread?.id !== thread.id), threadComment(thread, note)].sort(byPlace)
     threadNotes = threadNotes.filter(n => n.id !== thread.id)
     persistComments()
     refreshThread(thread)
@@ -1870,7 +1899,7 @@ document.addEventListener('click', event => {
   const head = t.closest('.file-head')
   const headToggle =
     head && !t.closest('button, label, input, a') && window.getSelection()?.isCollapsed !== false ? head.querySelector('[data-collapse]') : null
-  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-reply],[data-jump],[data-describe-edit],[data-send-now],[data-remove-at],[data-thread-act],[data-changes]')
+  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-file-comment],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-reply],[data-jump],[data-describe-edit],[data-send-now],[data-remove-at],[data-thread-act],[data-changes]')
   if (!t.closest('#submit') && !t.closest('[data-act="review"]')) $('#submit').hidden = true
   if (!el) return
   const d = el.dataset
@@ -1904,6 +1933,14 @@ document.addEventListener('click', event => {
       () => showTip(el, "Couldn't copy"),
     )
   }
+  if (d.fileComment) {
+    const file = files.find(f => f.path === d.fileComment)
+    if (file && isCollapsed(file)) {
+      collapsed.delete(file.path)
+      if (isViewed(file)) collapsed.add(`open:${file.path}`)
+    }
+    openComposer({ path: d.fileComment, kind: 'file' })
+  }
   if (d.goto) {
     const file = files.find(f => f.path === d.goto)
     if (file && isCollapsed(file)) {
@@ -1927,7 +1964,7 @@ document.addEventListener('click', event => {
   }
   if (d.reply !== undefined) {
     const parent = sent[Number(d.reply)]
-    if (parent) openComposer({ path: parent.path, side: parent.side, start: parent.start, line: parent.line, replyTo: parent.id })
+    if (parent) openComposer({ path: parent.path, kind: parent.kind, side: parent.side, start: parent.start, line: parent.line, replyTo: parent.id })
   }
   if (d.dismiss) {
     const root = sent[Number(d.dismiss)]

@@ -319,6 +319,7 @@ type ReviewThread = {
   line?: number
   start?: number
   originalLine?: number
+  file: boolean
   side: 'old' | 'new'
   key: string
   comments: ThreadComment[]
@@ -334,6 +335,7 @@ type GqlThread = {
   line: number | null
   startLine: number | null
   originalLine: number | null
+  subjectType: string
   diffSide: string
   comments: {
     totalCount: number
@@ -342,7 +344,7 @@ type GqlThread = {
 }
 
 const THREAD_FIELDS =
-  'reviewThreads(first:100){nodes{id isResolved isOutdated viewerCanResolve viewerCanUnresolve path line startLine originalLine diffSide ' +
+  'reviewThreads(first:100){nodes{id isResolved isOutdated viewerCanResolve viewerCanUnresolve path line startLine originalLine subjectType diffSide ' +
   'comments(last:50){totalCount nodes{id updatedAt createdAt url body bodyHTML author{login avatarUrl(size:40)}}}}}'
 const THREAD_CACHE_MS = 7 * 24 * 60 * 60_000
 let threadCache: { key: string; cache: ThreadCache } | undefined
@@ -376,6 +378,7 @@ function toThread(t: GqlThread): ReviewThread {
     line: t.line ?? undefined,
     start: t.startLine && t.line && t.startLine !== t.line ? t.startLine : undefined,
     originalLine: t.originalLine ?? undefined,
+    file: t.subjectType === 'FILE',
     side: t.diffSide === 'LEFT' ? 'old' : 'new',
     key: commentKey(t.comments),
     comments: t.comments.nodes.map(c => ({
@@ -746,7 +749,8 @@ async function pushReview($: Engine) {
 }
 
 type ReviewComment = {
-  kind?: 'description' | 'thread'
+  kind?: 'description' | 'thread' | 'file'
+  file?: boolean
   thread?: { id: string; url: string }
   note?: string
   quote?: string
@@ -755,8 +759,8 @@ type ReviewComment = {
   base?: string
   path: string
   start?: number
-  line: number
-  side: 'old' | 'new'
+  line?: number
+  side?: 'old' | 'new'
   text: string
   code?: string
   replyTo?: string | number
@@ -896,8 +900,9 @@ function newRef(branch: string, comment: ReviewComment) {
 
 function reviewPrompt(action: ReviewAction, rows: StackRow[]) {
   const where = (c: ReviewComment) =>
-    `\`${c.path}:${c.start && c.start !== c.line ? `${c.start}-${c.line}` : c.line}\`` +
-    (c.side === 'old' ? ` (removed line${c.start && c.start !== c.line ? 's' : ''})` : '')
+    c.kind === 'file' || c.file
+      ? `\`${c.path}\` (file)`
+      : `\`${c.path}:${c.start && c.start !== c.line ? `${c.start}-${c.line}` : c.line}\`` + (c.side === 'old' ? ` (removed line${c.start && c.start !== c.line ? 's' : ''})` : '')
   const followUp = (c: ReviewComment) => {
     if (!c.replyTo) return undefined
     if (c.parentRef && refTargets.get(c.parentRef)?.id === String(c.replyTo)) return { target: `re ${c.parentRef}`, tail: '' }

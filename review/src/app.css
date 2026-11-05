@@ -1552,7 +1552,8 @@ td.ln[data-line]:has(+ td.code:hover) {
   color: var(--text);
 }
 
-.stranded {
+.stranded,
+.file-comments {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1568,7 +1569,9 @@ td.ln[data-line]:has(+ td.code:hover) {
 }
 
 .stranded .comment,
-.stranded .composer {
+.stranded .composer,
+.file-comments .comment,
+.file-comments .composer {
   max-width: none;
 }
 
