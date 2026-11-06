@@ -1920,6 +1920,12 @@ document.addEventListener('click', event => {
     const file = files.find(f => f.path === d.collapse)
     if (!file) return
     const wasClosed = isCollapsed(file)
+    if (event.altKey) {
+      collapsed = new Set(wasClosed ? files.filter(isViewed).map(f => `open:${f.path}`) : files.map(f => f.path))
+      renderAll()
+      scrollToFile(file.path)
+      return
+    }
     collapsed.delete(file.path)
     collapsed.delete(`open:${file.path}`)
     if (!wasClosed) collapsed.add(file.path)
