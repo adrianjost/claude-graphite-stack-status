@@ -19,6 +19,7 @@ const working = atom({ plugin: 'graphite-stack', key: 'working' } as const, null
 const reviewUrl = atom({ plugin: 'graphite-stack', key: 'reviewUrl' } as const, null as string | null)
 const waitingPrompts = atom({ plugin: 'graphite-stack', key: 'waitingPrompts' } as const, [] as WaitingPrompt[])
 const reviewReplies = atom({ plugin: 'graphite-stack', key: 'reviewReplies' } as const, {} as Record<string, ReviewReply>)
+const sessionStart = atom({ plugin: 'graphite-stack', key: 'sessionStart' } as const, null as number | null)
 const updateInfo = atom({ plugin: 'graphite-stack', key: 'updateInfo' } as const, null as UpdateInfo | null)
 const REPLY_TOOL = 'mcp__graphite-stack__review_reply'
 const REPLY_LINE = `When done, call ${REPLY_TOOL} once: refs you addressed in \`fixed\`; a one-sentence reply only for questions or anything you didn't do.`
@@ -253,23 +254,107 @@ async function newerTrunk($: Engine, cwd: string, trunk: string, branch: string)
   return (await run($, cwd, ['git', 'merge-base', local, upstream])) === local ? remote : trunk
 }
 
+async function sessionBranches($: Engine, cwd: string, since: number | null) {
+  if (!since) return []
+  const log = (await run($, cwd, ['git', 'reflog', '--date=unix', '--format=%gd %gs', 'HEAD'])) ?? ''
+  const names: string[] = []
+  for (const line of log.split('\n')) {
+    const m = /^HEAD@\{(\d+)\} checkout: moving from (\S+) to (\S+)$/.exec(line)
+    if (!m?.[2] || !m[3]) continue
+    if (Number(m[1]) * 1000 < since) break
+    names.push(m[3], m[2])
+  }
+  return [...new Set(names)]
+}
+
+type BoundPr = { number: number; repo: string; state: string; head?: string }
+
+async function sessionPrBranches($: Engine, cwd: string) {
+  let status: { pr?: BoundPr; otherBoundPrs?: BoundPr[] }
+  try {
+    const result = await $.mcp.call('ccd_pr', 'get_status', {})
+    const block = result.content[0]
+    if (result.isError || block?.type !== 'text') return []
+    status = JSON.parse(block.text ?? "{}")
+  } catch {
+    return []
+  }
+  const repo = await githubRepo($, cwd)
+  if (!repo) return []
+  const slug = `${repo.owner}/${repo.name}`
+  const open = [status.pr, ...(status.otherBoundPrs ?? [])].filter(
+    (pr): pr is BoundPr => !!pr && pr.repo.toLowerCase() === slug.toLowerCase() && pr.state === 'open',
+  )
+  const key = `heads:${slug}`
+  const heads = ((await $.store.get(key)) ?? {}) as Record<string, string>
+  for (const pr of open) if (pr.head) heads[pr.number] = pr.head
+  const missing = open.filter(pr => !heads[pr.number])
+  if (missing.length) {
+    const fields = missing.map(pr => `p${pr.number}:pullRequest(number:${pr.number}){headRefName}`).join(' ')
+    const query = `query{repository(owner:${JSON.stringify(repo.owner)},name:${JSON.stringify(repo.name)}){${fields}}}`
+    const result = await exec($, cwd, ['gh', 'api', 'graphql', '-f', `query=${query}`]).catch(() => undefined)
+    if (result?.exitCode === 0) {
+      const found = (JSON.parse(result.stdout) as { data?: { repository?: Record<string, { headRefName: string } | null> } }).data?.repository
+      for (const pr of missing) {
+        const head = found?.[`p${pr.number}`]?.headRefName
+        if (head) heads[pr.number] = head
+      }
+    }
+  }
+  await $.store.set(key, heads)
+  return open.map(pr => heads[pr.number]).filter((head): head is string => !!head)
+}
+
 async function untrackedRows($: Engine, cwd: string, branch: string): Promise<Built | undefined> {
   const trunk = await detectTrunk($, cwd)
   if (!trunk) return undefined
-  const base = await newerTrunk($, cwd, trunk, branch)
-  const row = { branch, parent: base, lane: noLane, isCurrent: true, isTrunk: false, needsRestack: false }
-  if (branch === trunk || (await run($, cwd, ['git', 'rev-list', '--count', `${base}..${branch}`])) === '0') {
-    if (!(await run($, cwd, ['git', 'status', '--porcelain']))) return undefined
-    return { rows: [{ ...row, uncommittedOnly: true }], columns: 1, untracked: true }
+  const [switched, withPr] = await Promise.all([sessionBranches($, cwd, await read($, sessionStart)), sessionPrBranches($, cwd)])
+  const candidates = [branch, ...withPr, ...switched].filter(
+    (name, i, all) => name !== trunk && all.indexOf(name) === i,
+  )
+  const dirty = !!(await run($, cwd, ['git', 'status', '--porcelain']))
+  const found = await Promise.all(
+    candidates.map(async name => {
+      if (name !== branch && !(await run($, cwd, ['git', 'rev-parse', '--verify', '--quiet', `refs/heads/${name}`]))) return undefined
+      const base = await newerTrunk($, cwd, trunk, name)
+      const own = (await run($, cwd, ['git', 'rev-list', '--count', `${base}..${name}`])) !== '0'
+      if (!own && !(name === branch && dirty)) return undefined
+      return { name, base, own }
+    }),
+  )
+  type Found = { name: string; base: string; own: boolean }
+  const branches = found.filter((b): b is Found => !!b)
+  const row = (b: Found, lane: Lane): StackRow => ({
+    branch: b.name,
+    parent: b.base,
+    lane,
+    isCurrent: b.name === branch,
+    isTrunk: false,
+    needsRestack: false,
+    ...(b.own ? {} : { uncommittedOnly: true }),
+  })
+  if (branch === trunk && dirty) branches.unshift({ name: trunk, base: trunk, own: false })
+  const children = branches.filter(b => b.own)
+  const loose = branches.filter(b => !b.own)
+  const first = children[0]
+  if (!first) return loose[0] ? { rows: loose.map(b => row(b, noLane)), columns: 1, untracked: true } : undefined
+  const trunkDirty = loose[0]?.name === trunk
+  const bottom: StackRow = {
+    branch: trunkDirty ? trunk : first.base,
+    lane: { ...noLane, up: true, upOwner: first.name, corners: children.slice(1).map((_, i) => i + 1), cornerOwners: children.slice(1).map(c => c.name) },
+    isCurrent: trunkDirty,
+    isTrunk: !trunkDirty,
+    needsRestack: false,
+    ...(trunkDirty ? { parent: trunk, uncommittedOnly: true } : {}),
   }
-  return {
-    rows: [
-      { ...row, lane: { ...noLane, down: true } },
-      { branch: base, lane: { ...noLane, up: true, upOwner: branch }, isCurrent: false, isTrunk: true, needsRestack: false },
-    ],
-    columns: 1,
-    untracked: true,
-  }
+  const rows = [
+    ...loose.filter(b => b.name !== trunk).map(b => row(b, noLane)),
+    ...children.map((b, i) =>
+      row(b, { ...noLane, col: i, down: true, pipes: children.slice(0, i).map((_, k) => k), pipeOwners: children.slice(0, i).map(c => c.name) }),
+    ),
+    bottom,
+  ]
+  return { rows, columns: children.length, untracked: true }
 }
 
 const trunkOf = (rows: StackRow[]) => (rows.find(row => row.isTrunk) ?? rows.find(row => row.uncommittedOnly))?.branch
@@ -1379,8 +1464,9 @@ async function refresh($: Engine, mode: Mode) {
         if (row.isTrunk) return row
         const parent = row.parent
         if (built.untracked) {
-          const base = row.uncommittedOnly ? 'HEAD' : await run($, cwd, ['git', 'merge-base', parent ?? '', row.branch])
           const pr = row.uncommittedOnly ? undefined : prs ? prs.get(row.branch) : previous.get(row.branch)
+          if (!row.isCurrent) return { ...row, pr, diff: parent ? await diffStat($, cwd, parent, row.branch) : undefined }
+          const base = row.uncommittedOnly ? 'HEAD' : await run($, cwd, ['git', 'merge-base', parent ?? '', row.branch])
           return { ...row, pr, diff: base ? await worktreeStat($, cwd, base) : undefined }
         }
         const [pr, isAncestor, diff] = await Promise.all([
@@ -1687,6 +1773,7 @@ export const register: Register = on => {
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    await update($, sessionStart, at => at ?? Date.now())
     const stored = await $.store.get('linkTarget')
     if (stored === 'github' || stored === 'graphite') await update($, linkTarget, () => stored)
     void checkUpdate($)

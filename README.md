@@ -68,7 +68,7 @@ The band appears on its own whenever the session's branch belongs to a Graphite 
 
 Each session serves its own page on `127.0.0.1` with a fixed port, so several review pages can be open at once and an open tab reconnects after a restart. Requests need a random token in the page's URL, and other sites can't call it; see [SECURITY.md](SECURITY.md).
 
-Without Graphite tracking, the band and review page still work for a first iteration: on a branch `gt` doesn't track they show that one branch against trunk (with its PR once pushed), and on a trunk with uncommitted changes they show just those changes. Trunk comes from Graphite's repo config, then `origin/HEAD`, then `main` or `master`. Graphite-only actions (**Sync with main**, **Submit as draft PR**) are hidden there.
+Without Graphite tracking, the band and review page still work for a first iteration: on a branch `gt` doesn't track they show it against trunk (with its PR once pushed), next to the session's other open PRs from the desktop app's PR panel and every other branch checked out in this session, and on a trunk with uncommitted changes they show just those changes. Trunk comes from Graphite's repo config, then `origin/HEAD`, then `main` or `master`. Graphite-only actions (**Sync with main**, **Submit as draft PR**) are hidden there.
 
 ## Keeping the stack current
 
