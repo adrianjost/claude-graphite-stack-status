@@ -243,18 +243,29 @@ async function detectTrunk($: Engine, cwd: string) {
 
 const noLane: Lane = { col: 0, up: false, down: false, pipes: [], corners: [] }
 
+async function newerTrunk($: Engine, cwd: string, trunk: string, branch: string) {
+  const remote = `origin/${trunk}`
+  const [local, upstream] = await Promise.all([
+    run($, cwd, ['git', 'merge-base', trunk, branch]),
+    run($, cwd, ['git', 'merge-base', remote, branch]),
+  ])
+  if (!local || !upstream || local === upstream) return trunk
+  return (await run($, cwd, ['git', 'merge-base', local, upstream])) === local ? remote : trunk
+}
+
 async function untrackedRows($: Engine, cwd: string, branch: string): Promise<Built | undefined> {
   const trunk = await detectTrunk($, cwd)
   if (!trunk) return undefined
-  const row = { branch, parent: trunk, lane: noLane, isCurrent: true, isTrunk: false, needsRestack: false }
-  if (branch === trunk) {
+  const base = await newerTrunk($, cwd, trunk, branch)
+  const row = { branch, parent: base, lane: noLane, isCurrent: true, isTrunk: false, needsRestack: false }
+  if (branch === trunk || (await run($, cwd, ['git', 'rev-list', '--count', `${base}..${branch}`])) === '0') {
     if (!(await run($, cwd, ['git', 'status', '--porcelain']))) return undefined
     return { rows: [{ ...row, uncommittedOnly: true }], columns: 1, untracked: true }
   }
   return {
     rows: [
       { ...row, lane: { ...noLane, down: true } },
-      { branch: trunk, lane: { ...noLane, up: true, upOwner: branch }, isCurrent: false, isTrunk: true, needsRestack: false },
+      { branch: base, lane: { ...noLane, up: true, upOwner: branch }, isCurrent: false, isTrunk: true, needsRestack: false },
     ],
     columns: 1,
     untracked: true,
