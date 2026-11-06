@@ -68,6 +68,8 @@ The band appears on its own whenever the session's branch belongs to a Graphite 
 
 Each session serves its own page on `127.0.0.1` with a fixed port, so several review pages can be open at once and an open tab reconnects after a restart. Requests need a random token in the page's URL, and other sites can't call it; see [SECURITY.md](SECURITY.md).
 
+Without Graphite tracking, the band and review page still work for a first iteration: on a branch `gt` doesn't track they show that one branch against trunk (with its PR once pushed), and on a trunk with uncommitted changes they show just those changes. Trunk comes from Graphite's repo config, then `origin/HEAD`, then `main` or `master`. Graphite-only actions (**Sync with main**, **Submit as draft PR**) are hidden there.
+
 ## Keeping the stack current
 
 **Sync with main** in the band's header runs `gt sync` and `gt restack` right away, so the whole stack is based on the latest `origin/main`. A branch's **↻ restack** button does the same for that branch's stack. The header shows progress while they run, and neither pushes anything. If a rebase hits a conflict, the working tree has uncommitted changes or a command fails, the job is handed to Claude to finish.

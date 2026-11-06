@@ -1760,3 +1760,8 @@ td.ln[data-line]:has(+ td.code:hover) {
   font: 11px var(--mono);
   color: var(--muted);
 }
+
+.untracked-note {
+  color: var(--muted);
+  font-style: italic;
+}

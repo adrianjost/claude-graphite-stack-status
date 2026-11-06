@@ -193,10 +193,8 @@ function latestChecks(checks: GhCheck[]) {
   return [...latest.values()]
 }
 
-async function diffStat($: Engine, cwd: string, parent: string, branch: string) {
-  const out = await run($, cwd, ['git', 'diff', '-w', '--numstat', `${parent}...${branch}`])
-  if (out === undefined) return undefined
-  let added = 0
+function sumStat(out: string, extra = 0) {
+  let added = extra
   let removed = 0
   for (const line of out.split('\n')) {
     const [a, r] = line.split('\t')
@@ -205,6 +203,65 @@ async function diffStat($: Engine, cwd: string, parent: string, branch: string) 
   }
   return added || removed ? { added, removed } : undefined
 }
+
+async function diffStat($: Engine, cwd: string, parent: string, branch: string) {
+  const out = await run($, cwd, ['git', 'diff', '-w', '--numstat', `${parent}...${branch}`])
+  return out === undefined ? undefined : sumStat(out)
+}
+
+async function worktreeStat($: Engine, cwd: string, base: string) {
+  const [tracked, listed] = await Promise.all([
+    run($, cwd, ['git', 'diff', '-w', '--numstat', base]),
+    run($, cwd, ['git', 'ls-files', '--others', '--exclude-standard', '-z']),
+  ])
+  const files = (listed ?? '').split('\0').filter(Boolean).slice(0, 200)
+  const counted = files.length ? await exec($, cwd, ['git', 'grep', '--no-index', '-I', '-c', '-e', '', '--', ...files]) : undefined
+  const lines = (counted?.stdout ?? '').split('\n').reduce((sum, line) => sum + (Number(line.slice(line.lastIndexOf(':') + 1)) || 0), 0)
+  return sumStat(tracked ?? '', lines)
+}
+
+const trunks = new Map<string, string>()
+
+async function detectTrunk($: Engine, cwd: string) {
+  const known = trunks.get(cwd)
+  if (known) return known
+  const gitDir = await run($, cwd, ['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'])
+  if (!gitDir) return undefined
+  let configured: string | undefined
+  try {
+    configured = (JSON.parse((await run($, cwd, ['cat', `${gitDir}/.graphite_repo_config`])) || '{}') as { trunk?: string }).trunk
+  } catch {}
+  const remote = (await run($, cwd, ['git', 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD']))?.replace(/^origin\//, '')
+  for (const name of [configured, remote, 'main', 'master']) {
+    if (name && (await run($, cwd, ['git', 'rev-parse', '--verify', '--quiet', `${name}^{commit}`]))) {
+      trunks.set(cwd, name)
+      return name
+    }
+  }
+  return undefined
+}
+
+const noLane: Lane = { col: 0, up: false, down: false, pipes: [], corners: [] }
+
+async function untrackedRows($: Engine, cwd: string, branch: string): Promise<Built | undefined> {
+  const trunk = await detectTrunk($, cwd)
+  if (!trunk) return undefined
+  const row = { branch, parent: trunk, lane: noLane, isCurrent: true, isTrunk: false, needsRestack: false }
+  if (branch === trunk) {
+    if (!(await run($, cwd, ['git', 'status', '--porcelain']))) return undefined
+    return { rows: [{ ...row, uncommittedOnly: true }], columns: 1, untracked: true }
+  }
+  return {
+    rows: [
+      { ...row, lane: { ...noLane, down: true } },
+      { branch: trunk, lane: { ...noLane, up: true, upOwner: branch }, isCurrent: false, isTrunk: true, needsRestack: false },
+    ],
+    columns: 1,
+    untracked: true,
+  }
+}
+
+const trunkOf = (rows: StackRow[]) => (rows.find(row => row.isTrunk) ?? rows.find(row => row.uncommittedOnly))?.branch
 
 class GitHubError extends Error {}
 
@@ -476,11 +533,9 @@ async function readMetadata($: Engine, cwd: string, gitDir: string) {
   return JSON.parse(result.stdout.trim() || '[]') as MetaRow[]
 }
 
-async function buildRows(
-  $: Engine,
-  cwd: string,
-  branch: string,
-): Promise<{ rows: StackRow[]; columns: number; detached?: string } | string> {
+type Built = { rows: StackRow[]; columns: number; detached?: string; untracked?: boolean }
+
+async function buildRows($: Engine, cwd: string, branch: string): Promise<Built | string> {
   const gitDir = await run($, cwd, ['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'])
   if (!gitDir) return 'Not a git repository.'
   const metadata = await readMetadata($, cwd, gitDir)
@@ -710,13 +765,15 @@ async function pushReview($: Engine) {
   const threads = await threadStore($)
   const payload = {
     repo: cwd.split('/').pop(),
-    trunk: s.rows.find(row => row.isTrunk)?.branch,
+    trunk: trunkOf(s.rows),
+    untracked: s.untracked,
     current: s.branch,
     generated: GENERATED.source,
     rows: s.rows.map(row => ({
       branch: row.branch,
       parent: row.parent,
       isTrunk: row.isTrunk,
+      uncommittedOnly: row.uncommittedOnly,
       isCurrent: row.isCurrent,
       needsRestack: row.needsRestack,
       diff: row.diff,
@@ -1117,9 +1174,11 @@ async function pollReviewActions($: Engine, port: number) {
         results[action.id] = await loadReviewers($, action.number, action.query).catch(error => ({ ok: false, message: String(error) }))
       }
       if (!handled.has(action.id) && action.type === 'submit-branch') {
-        const rows = (await read($, snapshot)).rows
+        const current = await read($, snapshot)
+        const rows = current.rows
         const row = rows.find(r => r.branch === action.branch && !r.isTrunk)
-        if (!row) results[action.id] = { ok: false, message: 'That branch is not part of the stack.' }
+        if (current.untracked) results[action.id] = { ok: false, message: 'This branch is not tracked by Graphite yet.' }
+        else if (!row) results[action.id] = { ok: false, message: 'That branch is not part of the stack.' }
         else {
           await queuePrompt(
             $,
@@ -1263,17 +1322,20 @@ async function refresh($: Engine, mode: Mode) {
     const cwd = await $.session.cwd()
     const branch = (await run($, cwd, ['git', 'branch', '--show-current'])) ?? ''
     await update($, snapshot, s => ({ ...s, isLoading: true }))
-    const built = branch ? await buildRows($, cwd, branch) : 'Detached HEAD.'
+    let built = branch ? await buildRows($, cwd, branch) : 'Detached HEAD.'
     if (typeof built === 'string') {
       const held = await read($, snapshot)
-      const trunk = held.rows.find(row => row.isTrunk)?.branch
-      if (held.rows.length && (!branch || branch === trunk)) {
+      if (held.rows.length && (!branch || (branch === trunkOf(held.rows) && !held.untracked))) {
         await update($, snapshot, s => ({ ...s, hold: branch ? `on ${branch}` : 'rebasing…', isLoading: false }))
         $.clock.after(3_000, () => requestRefresh($, 'local'))
         return
       }
-      await update($, snapshot, () => ({ branch, rows: [], columns: 1, updatedAt: Date.now(), isLoading: false }))
-      return
+      const fallback = branch && built !== 'Not a git repository.' ? await untrackedRows($, cwd, branch) : undefined
+      if (!fallback) {
+        await update($, snapshot, () => ({ branch, rows: [], columns: 1, updatedAt: Date.now(), isLoading: false }))
+        return
+      }
+      built = fallback
     }
 
     const before = await read($, snapshot)
@@ -1285,7 +1347,7 @@ async function refresh($: Engine, mode: Mode) {
         : await loadPrs(
             $,
             cwd,
-            built.rows.filter(row => !row.isTrunk).map(row => row.branch),
+            built.rows.filter(row => !row.isTrunk && !row.uncommittedOnly).map(row => row.branch),
             mode === 'force',
           ).then(
             result => {
@@ -1305,6 +1367,11 @@ async function refresh($: Engine, mode: Mode) {
       built.rows.map(async row => {
         if (row.isTrunk) return row
         const parent = row.parent
+        if (built.untracked) {
+          const base = row.uncommittedOnly ? 'HEAD' : await run($, cwd, ['git', 'merge-base', parent ?? '', row.branch])
+          const pr = row.uncommittedOnly ? undefined : prs ? prs.get(row.branch) : previous.get(row.branch)
+          return { ...row, pr, diff: base ? await worktreeStat($, cwd, base) : undefined }
+        }
         const [pr, isAncestor, diff] = await Promise.all([
           prs ? prs.get(row.branch) : previous.get(row.branch),
           parent
@@ -1325,11 +1392,12 @@ async function refresh($: Engine, mode: Mode) {
       updatedAt: prs ? Date.now() : s.updatedAt,
       isStale,
       hold: undefined,
+      untracked: built.untracked,
       githubIssue: ghIssue,
       issue: ghIssue ?? (built.detached ? detachedIssue(built.detached, built.rows.find(row => row.isTrunk)?.branch ?? 'main') : undefined),
       isLoading: false,
     }))
-    if (rows.length > 1 && !review) void startReview($)
+    if (rows.some(row => !row.isTrunk) && !review) void startReview($)
     else if (prs) void syncThreads($)
     const failing = rows.filter(r => r.pr?.ci === 'fail').length
     $.ui.status(failing ? `stack: ${failing} PR${failing > 1 ? 's' : ''} failing CI` : undefined)
@@ -1635,7 +1703,7 @@ export const register: Register = on => {
       .catch(error => $.ui.log(`review_reply tool not registered: ${String(error)}`, { to: 'debug' }))
     void refresh($, 'github').then(async () => {
       void schedulePoll($)
-      if ((await read($, snapshot)).rows.length > 1) void startReview($)
+      if ((await read($, snapshot)).rows.some(row => !row.isTrunk)) void startReview($)
     })
 
     return started
@@ -1726,7 +1794,7 @@ export const register: Register = on => {
     const layout = metaLayout(prs.flatMap(row => (row.pr ? [row.pr] : [])))
     const newVersion = await read($, updateInfo)
     const summary = [
-      `${prs.length} PR${prs.length === 1 ? '' : 's'}`,
+      s.untracked && !prs.length ? '' : `${prs.length} PR${prs.length === 1 ? '' : 's'}`,
       failing ? `${failing} failing` : '',
       busy ?? s.hold ?? (s.isLoading ? 'refreshing…' : ''),
 
@@ -1772,13 +1840,15 @@ export const register: Register = on => {
             }}
           />
           <Button key="review" plain dimColor label="Review stack" onPress={() => void openReview($, s.branch)} />
-          <Button
-            key="sync"
-            plain
-            dimColor
-            label={busy && !busy.startsWith('Restacking') ? 'Syncing…' : 'Sync with main'}
-            onPress={() => void stackAction($)}
-          />
+          {!s.untracked && (
+            <Button
+              key="sync"
+              plain
+              dimColor
+              label={busy && !busy.startsWith('Restacking') ? 'Syncing…' : 'Sync with main'}
+              onPress={() => void stackAction($)}
+            />
+          )}
           <Button key="refresh" plain dimColor label="Refresh" onPress={() => void refresh($, 'force')} />
           <Button key="hide" plain dimColor label="Hide" onPress={() => void update($, isHidden, () => true)} />
         </Box>
@@ -1859,10 +1929,17 @@ export const register: Register = on => {
               <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
                 {pr ? (
                   <Link href={prUrl(pr)}><Text wrap="truncate-end">{pr.title}</Text></Link>
+                ) : row.uncommittedOnly ? (
+                  <Text dimColor italic wrap="truncate-end">uncommitted changes on {row.branch}</Text>
                 ) : (
                   <Text dimColor italic={!row.isTrunk} wrap="truncate-end">{row.branch}</Text>
                 )}
               </Box>
+              {s.untracked && !row.isTrunk && !row.uncommittedOnly && (
+                <Box flexShrink={0}>
+                  <Text dimColor>not tracked by Graphite</Text>
+                </Box>
+              )}
               {row.needsRestack && (
                 <Box flexShrink={0}>
                   <Button

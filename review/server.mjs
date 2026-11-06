@@ -107,7 +107,7 @@ async function diffFor(query) {
   const status = isCurrent ? (await git(['status', '--porcelain'])).stdout : ''
   const dirty = status.trim().length > 0
   const requested = query.get('uncommitted')
-  const mode = isCurrent && dirty ? (requested === '0' ? 'committed' : requested === 'only' ? 'uncommitted' : 'all') : 'committed'
+  const mode = row.uncommittedOnly ? 'uncommitted' : isCurrent && dirty ? (requested === '0' ? 'committed' : requested === 'only' ? 'uncommitted' : 'all') : 'committed'
   const includeWorktree = mode !== 'committed'
   const pending =
     mode === 'committed' ? '' : (await git(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '-M', ...ws, 'HEAD'])).stdout + (await untrackedDiff(ws.length > 0))
@@ -131,7 +131,7 @@ async function diffFor(query) {
     const [title = '', body = ''] = (first.stdout.split('\x1e')[0] ?? '').replace(/^\n/, '').split('\x1f')
     if (title.trim()) draft = { title: title.trim(), body: body.trim() }
   }
-  return { branch: row.branch, parent, base, head, diff, pending: mode === 'all' ? pending : '', commits, isCurrent, dirty, mode, includeWorktree, draft }
+  return { branch: row.branch, parent, base, head, diff, pending: mode === 'all' ? pending : '', commits, isCurrent, dirty, mode, includeWorktree, draft, uncommittedOnly: row.uncommittedOnly }
 }
 
 async function changesFor(query) {

@@ -51,6 +51,7 @@ export type StackRow = {
   isCurrent: boolean
   isTrunk: boolean
   needsRestack: boolean
+  uncommittedOnly?: boolean
   pr?: PrInfo
   diff?: { added: number; removed: number }
 }
@@ -62,6 +63,7 @@ export type StackSnapshot = {
   updatedAt: number
   isStale?: boolean
   hold?: string
+  untracked?: boolean
   issue?: Issue
   githubIssue?: Issue
   isLoading: boolean

@@ -1093,7 +1093,7 @@ function renderHeader() {
       pr
         ? prInfo(pr)
         : `<div class="pr-info"><span class="state none">No PR yet</span>
-            <button class="btn small" data-act="submit-branch">Submit as draft PR</button></div>`
+            ${state.untracked ? '' : '<button class="btn small" data-act="submit-branch">Submit as draft PR</button>'}</div>`
     }
     <h1>${title}</h1>
     <div class="meta">
@@ -1105,6 +1105,7 @@ function renderHeader() {
       <span>${files.length} file${files.length === 1 ? '' : 's'}</span>
       <span class="stat"><span class="add">+${totals.added}</span> <span class="del">−${totals.removed}</span></span>
       ${row.needsRestack ? '<span class="badge pending">Needs restack</span>' : ''}
+      ${state.untracked ? '<span class="untracked-note">Not tracked by Graphite yet</span>' : ''}
       ${current?.mode === 'all' ? '<span class="badge pending">Includes uncommitted changes</span>' : ''}
       ${current?.mode === 'uncommitted' ? '<span class="badge pending">Uncommitted changes only</span>' : ''}
     </div>
@@ -1118,7 +1119,7 @@ function renderHeader() {
         <button data-compare="trunk" ${pressed(prefs.compare === 'trunk')}>vs ${esc(state.trunk ?? 'trunk')}</button>
       </span>
       ${
-        current?.isCurrent && current?.dirty
+        current?.isCurrent && current?.dirty && !current?.uncommittedOnly
           ? `<span class="segmented" title="The checked-out branch has uncommitted changes">
               <button data-uncommitted="all" ${pressed(current.mode === 'all')}>All changes</button>
               <button data-uncommitted="committed" ${pressed(current.mode === 'committed')}>Committed</button>
