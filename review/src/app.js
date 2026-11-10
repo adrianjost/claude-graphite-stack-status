@@ -470,14 +470,13 @@ function sentThread(chain) {
   const outdated = !isFile(root) && codeAt(root) !== (root.code ?? '')
   const msgs = chain
     .map(
-      c => `<div class="msg"><div class="comment-head"><strong>You</strong>${refTag(c)}<span class="badge sent">Sent to Claude</span>${answerBadge(c)}${c === root && outdated ? '<span class="badge">Outdated</span>' : ''}<span>${esc(timeAgo(c.sentAt))}</span><span class="spacer"></span>${
-        c === leaf && !draft && !box ? `<button class="btn invisible" data-reply="${sent.indexOf(c)}" title="Follow up on this with Claude">Reply</button>` : ''
-      }${c === root ? `<button class="btn invisible" data-dismiss="${sent.indexOf(c)}" title="${chain.length > 1 ? 'Dismiss this conversation' : 'Dismiss'}">Dismiss</button>` : ''}</div>
+      c => `<div class="msg"><div class="comment-head"><strong>You</strong>${refTag(c)}<span class="badge sent">Sent to Claude</span>${answerBadge(c)}${c === root && outdated ? '<span class="badge">Outdated</span>' : ''}<span>${esc(timeAgo(c.sentAt))}</span><span class="spacer"></span>${c === root ? `<button class="btn invisible" data-dismiss="${sent.indexOf(c)}" title="${chain.length > 1 ? 'Dismiss this conversation' : 'Dismiss'}">Dismiss</button>` : ''}</div>
         <div class="comment-body">${esc(c.text)}</div>${answerBlock(c)}</div>`,
     )
     .join('')
   const pendingFollowUp = draft && !box ? pendingMsg(draft, comments.indexOf(draft)) : ''
-  return `<div class="${sentClass(root)} thread${chain.some(hasAnswer) || draft || box ? ' answered' : ''}">${msgs}${pendingFollowUp}${box ? composerBox(box) : ''}</div>`
+  const field = draft || box ? '' : `<div class="reply-field"><input readonly data-reply-field="${sent.indexOf(leaf)}" placeholder="Reply to Claude…"></div>`
+  return `<div class="${sentClass(root)} thread${chain.some(hasAnswer) || draft || box ? ' answered' : ''}">${msgs}${pendingFollowUp}${box ? composerBox(box) : field}</div>`
 }
 
 function answerBadge(c) {
@@ -588,7 +587,7 @@ function threadCard(thread) {
       (c, i) =>
         `<div class="gh-comment">${
           i ? `<div class="gh-reply-head">${avatar({ avatarUrl: c.avatar })}<strong>${esc(c.author)}</strong><span>${esc(timeAgo(Date.parse(c.createdAt)))}</span></div>` : ''
-        }<div class="markdown">${cleanHtml(c.bodyHtml)}</div></div>`,
+        }<div class="markdown">${suggestionsHtml(cleanHtml(c.bodyHtml), thread.path)}</div></div>`,
     )
     .join('')
   return `<div class="comment gh${thread.resolved ? ' resolved' : ''}" ${id}>
@@ -603,10 +602,37 @@ function threadCard(thread) {
     ${error ? `<div class="thread-error">${esc(error)}</div>` : ''}</div>`
 }
 
+function suggestionsHtml(html, path) {
+  if (!html.includes('js-suggested-changes-blob')) return html
+  const template = document.createElement('template')
+  template.innerHTML = html
+  const language = LANGUAGES[path.split('.').pop()?.toLowerCase() ?? '']
+  for (const blob of template.content.querySelectorAll('.js-suggested-changes-blob')) {
+    const rows = [...blob.querySelectorAll('tr')].map(tr => {
+      const code = tr.querySelector('.blob-code-inner')
+      return { del: !!code?.classList.contains('blob-code-deletion'), num: tr.querySelector('[data-line-number]')?.getAttribute('data-line-number') ?? '', text: code?.textContent ?? '' }
+    })
+    const del = rows.filter(r => r.del)
+    const add = rows.filter(r => !r.del)
+    const lines = [...highlight(del.map(r => r.text), language), ...highlight(add.map(r => r.text), language)]
+    const body = [...del, ...add]
+      .map((r, i) => `<tr class="${r.del ? 'sg-del' : 'sg-add'}"><td class="sg-num">${esc(r.num)}</td><td class="sg-sign">${r.del ? '−' : '+'}</td><td class="sg-code">${lines[i]}</td></tr>`)
+      .join('')
+    const box = document.createElement('div')
+    box.className = 'suggestion'
+    box.innerHTML = `<div class="suggestion-head">Suggested change</div><table><tbody>${body}</tbody></table>`
+    blob.replaceWith(box)
+  }
+  return template.innerHTML
+}
+
 function noteBox(thread, inReview) {
   const note = noteAt(thread.id)
   const saved = comments.find(c => c.thread?.id === thread.id)?.note
-  if (!note) return saved && !thread.resolved ? `<div class="comment-body"><strong>You:</strong> ${esc(saved)}</div>` : ''
+  if (!note) {
+    if (saved && !thread.resolved) return `<div class="comment-body"><strong>You:</strong> ${esc(saved)}</div>`
+    return thread.resolved ? '' : `<div class="reply-field"><input readonly data-note-field="${esc(thread.id)}" placeholder="Write guidance for Claude…"></div>`
+  }
   const id = `data-thread="${esc(thread.id)}"`
   return `<div class="composer thread-note" ${id}>
     <textarea placeholder="Add guidance for Claude (optional)…">${esc(note.text)}</textarea>
@@ -937,7 +963,7 @@ function renderDescriptionThreads() {
   comments.forEach((c, index) => {
     if (c.kind !== 'description' || describing?.index === index) return
     html += `<div class="comment"><div class="comment-head"><strong>You</strong><span class="badge">Pending</span><span>on the description</span><span class="spacer"></span>
-      <button class="btn invisible" data-describe-edit="${index}">Edit</button><button class="btn invisible" data-remove="${index}">Delete</button></div>
+      <button class="btn invisible" data-send-now="${index}" title="Send just this comment to Claude now">Send now</button><button class="btn invisible" data-describe-edit="${index}">Edit</button><button class="btn invisible" data-remove="${index}">Delete</button></div>
       <div class="comment-body">${quote(c.quote)}${esc(c.text)}</div></div>`
   })
   if (prefs.showSent) {
@@ -953,6 +979,7 @@ function renderDescriptionThreads() {
       <textarea placeholder="Feedback on the PR description for Claude…">${esc(describing.text ?? '')}</textarea>
       <div class="actions"><span class="muted hint">⌘↵ to save · Esc to cancel</span>
         <button class="btn" data-act="describe-cancel">Cancel</button>
+        <button class="btn" data-act="describe-send" title="Send just this comment to Claude now, without the rest of the review">Send to Claude now</button>
         <button class="btn primary" data-act="describe-save">${describing.index === undefined ? 'Add comment' : 'Update comment'}</button></div></div>`
   }
   box.innerHTML = html
@@ -1435,7 +1462,7 @@ async function sendNow(comment, button) {
   store(`sent:${selected}`, sent)
   comments = comments.filter(c => c !== comment)
   persistComments()
-  rerenderFile(comment.path)
+  if (comment.kind !== 'description') rerenderFile(comment.path)
   renderHeader()
   renderCommentViews()
   showTip(document.querySelector('[data-act="review"]') ?? button, result.data?.queued ? 'Queued for Claude ✓' : 'Sent to Claude ✓')
@@ -1900,7 +1927,7 @@ document.addEventListener('click', event => {
   const head = t.closest('.file-head')
   const headToggle =
     head && !t.closest('button, label, input, a') && window.getSelection()?.isCollapsed !== false ? head.querySelector('[data-collapse]') : null
-  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-file-comment],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-reply],[data-jump],[data-describe-edit],[data-send-now],[data-remove-at],[data-thread-act],[data-changes]')
+  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-file-comment],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-jump],[data-describe-edit],[data-send-now],[data-remove-at],[data-thread-act],[data-changes]')
   if (!t.closest('#submit') && !t.closest('[data-act="review"]')) $('#submit').hidden = true
   if (!el) return
   const d = el.dataset
@@ -1969,10 +1996,6 @@ document.addEventListener('click', event => {
     renderCommentViews()
     renderDescriptionThreads()
   }
-  if (d.reply !== undefined) {
-    const parent = sent[Number(d.reply)]
-    if (parent) openComposer({ path: parent.path, kind: parent.kind, side: parent.side, start: parent.start, line: parent.line, replyTo: parent.id })
-  }
   if (d.dismiss) {
     const root = sent[Number(d.dismiss)]
     const gone = new Set(threadsOf(sent).find(chain => chain[0] === root)?.map(c => c.id))
@@ -2026,6 +2049,11 @@ document.addEventListener('click', event => {
   }
   if (d.act === 'describe') openDescribe(el.dataset.quote ?? descriptionSelection())
   if (d.act === 'describe-save') saveDescribe()
+  if (d.act === 'describe-send' && $('#description .composer textarea')?.value.trim()) {
+    saveDescribe()
+    const index = comments.length - 1
+    sendNow(comments[index], document.querySelector(`[data-send-now="${index}"]`) ?? el)
+  }
   if (d.act === 'describe-cancel') {
     describing = null
     renderDescriptionThreads()
@@ -2189,6 +2217,34 @@ document.addEventListener('input', event => {
 
 window.addEventListener('resize', () => document.documentElement.style.setProperty('--header-height', `${$('#header').offsetHeight}px`))
 
+let deferred = null
+
+const isTyping = () =>
+  !!(composers.length || threadNotes.length || describing || document.activeElement?.matches('textarea, input:not([type=checkbox])'))
+
+function flushState() {
+  if (!deferred || (renderedKey && isTyping())) return
+  const { restarted, threadsWere } = deferred
+  deferred = null
+  if (applyReplies() && renderedKey) renderAll()
+  const threadsChanged = JSON.stringify(selectedRow()?.pr?.threads) !== threadsWere
+  loadDiff(restarted).then(() => threadsChanged && !restarted && renderAll())
+}
+
+document.addEventListener('focusin', event => {
+  const field = event.target.closest?.('.reply-field input')
+  if (!field) return
+  if (field.dataset.replyField !== undefined) {
+    const parent = sent[Number(field.dataset.replyField)]
+    if (parent) openComposer({ path: parent.path, kind: parent.kind, side: parent.side, start: parent.start, line: parent.line, replyTo: parent.id })
+  } else {
+    threadAct({ dataset: { thread: field.dataset.noteField, threadAct: 'add' } })
+  }
+})
+
+document.addEventListener('focusout', () => setTimeout(flushState, 0))
+setInterval(flushState, 1000)
+
 async function poll() {
   for (;;) {
     try {
@@ -2205,9 +2261,8 @@ async function poll() {
         if (fallback) select(fallback.branch)
       }
       renderStack()
-      if (applyReplies() && renderedKey) composers.length || threadNotes.length ? renderCommentViews() : renderAll()
-      const threadsChanged = JSON.stringify(selectedRow()?.pr?.threads) !== threadsWere
-      if (!(composers.length || threadNotes.length) || !renderedKey) loadDiff(restarted).then(() => threadsChanged && !restarted && renderAll())
+      deferred = { restarted: restarted || !!deferred?.restarted, threadsWere: deferred?.threadsWere ?? threadsWere }
+      flushState()
     } catch {
       $('#connection').className = 'connection offline'
       $('#connection').title = 'Disconnected: waiting for Claude Code'

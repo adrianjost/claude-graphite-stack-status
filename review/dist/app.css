@@ -2005,3 +2005,83 @@ td.ln[data-line]:has(+ td.code:hover) {
   color: var(--muted);
   font-style: italic;
 }
+
+.suggestion {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.suggestion-head {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.markdown .suggestion table {
+  display: table;
+  width: 100%;
+  border-collapse: collapse;
+  font: 12px/20px var(--mono);
+}
+
+.markdown .suggestion td {
+  padding: 0 8px;
+  border: 0;
+  white-space: pre;
+}
+
+.suggestion td.sg-num {
+  width: 1%;
+  text-align: right;
+  color: var(--muted);
+  user-select: none;
+}
+
+.suggestion td.sg-sign {
+  width: 1%;
+  padding: 0 4px;
+  user-select: none;
+}
+
+.suggestion td.sg-code {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.suggestion tr.sg-del td {
+  background: var(--del-line);
+}
+
+.suggestion tr.sg-del td.num {
+  background: var(--del-num);
+}
+
+.suggestion tr.sg-add td {
+  background: var(--add-line);
+}
+
+.suggestion tr.sg-add td.num {
+  background: var(--add-num);
+}
+
+.reply-field {
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-muted);
+}
+
+.reply-field input {
+  width: 100%;
+  max-width: 720px;
+  box-sizing: border-box;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: text;
+}
