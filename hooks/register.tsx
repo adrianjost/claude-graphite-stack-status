@@ -1496,8 +1496,6 @@ async function refresh($: Engine, mode: Mode) {
     }))
     if (rows.some(row => !row.isTrunk) && !review) void startReview($)
     else if (prs) void syncThreads($)
-    const failing = rows.filter(r => r.pr?.ci === 'fail').length
-    $.ui.status(failing ? `stack: ${failing} PR${failing > 1 ? 's' : ''} failing CI` : undefined)
   } catch (error) {
     const issue: Issue =
       error instanceof Problem ? error.issue : { message: 'The Graphite stack couldn\'t be refreshed', detail: String(error) }
