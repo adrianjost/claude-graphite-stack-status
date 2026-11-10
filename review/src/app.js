@@ -1071,13 +1071,23 @@ function paintLabels() {
 
 const shortBranch = branch => (branch ?? '').replace(/^[^/]+\//, '')
 
+const ICON_COLORS = ['#d1242f', '#e16f24', '#b08800', '#65a30d', '#1a7f37', '#0d9488', '#0891b2', '#0969da', '#4338ca', '#8250df', '#c026d3', '#db2777', '#57606a', '#7c4a03']
+
+function mix(text) {
+  let h = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193)
+  h = Math.imul(h ^ (h >>> 16), 0x85ebca6b)
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35)
+  return (h ^ (h >>> 16)) >>> 0
+}
+
 function updateIdentity() {
   const root = stackRows().at(-1)?.branch ?? selected
   const name = shortBranch(root) || 'stack'
-  const hue = Number.parseInt(hash(root || 'stack'), 36) % 360
+  const color = ICON_COLORS[mix(root || 'stack') % ICON_COLORS.length]
   const letter = esc((name.match(/[a-z0-9]/i)?.[0] ?? 'S').toUpperCase())
   const icon =
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="hsl(${hue} 62% 44%)"/>` +
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="${color}"/>` +
     `<text x="16" y="22.5" font-size="19" font-weight="700" font-family="system-ui,-apple-system,sans-serif" fill="#fff" text-anchor="middle">${letter}</text></svg>`
   const link = $('#favicon')
   const href = `data:image/svg+xml,${encodeURIComponent(icon)}`
