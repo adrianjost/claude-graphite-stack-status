@@ -1768,6 +1768,7 @@ td.ln[data-line]:has(+ td.code:hover) {
 
 .suggestion {
   margin: 8px 0;
+  white-space: normal;
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
@@ -1780,14 +1781,14 @@ td.ln[data-line]:has(+ td.code:hover) {
   font-size: 12px;
 }
 
-.markdown .suggestion table {
+.suggestion table {
   display: table;
   width: 100%;
   border-collapse: collapse;
   font: 12px/20px var(--mono);
 }
 
-.markdown .suggestion td {
+.suggestion td {
   padding: 0 8px;
   border: 0;
   white-space: pre;

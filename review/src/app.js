@@ -407,7 +407,7 @@ function pendingMsg(comment, index, extra = '') {
       <button class="btn invisible" data-send-now="${index}" title="Send just this comment to Claude now">Send now</button>
       <button class="btn invisible" data-edit="${index}">Edit</button>
       <button class="btn invisible" data-remove="${index}">Delete</button></div>
-    <div class="comment-body">${esc(comment.text)}</div></div>`
+    <div class="comment-body">${bodyWithSuggestions(comment)}</div></div>`
 }
 
 function composerBox(composer) {
@@ -471,7 +471,7 @@ function sentThread(chain) {
   const msgs = chain
     .map(
       c => `<div class="msg"><div class="comment-head"><strong>You</strong>${refTag(c)}<span class="badge sent">Sent to Claude</span>${answerBadge(c)}${c === root && outdated ? '<span class="badge">Outdated</span>' : ''}<span>${esc(timeAgo(c.sentAt))}</span><span class="spacer"></span>${c === root ? `<button class="btn invisible" data-dismiss="${sent.indexOf(c)}" title="${chain.length > 1 ? 'Dismiss this conversation' : 'Dismiss'}">Dismiss</button>` : ''}</div>
-        <div class="comment-body">${esc(c.text)}</div>${answerBlock(c)}</div>`,
+        <div class="comment-body">${bodyWithSuggestions(c)}</div>${answerBlock(c)}</div>`,
     )
     .join('')
   const pendingFollowUp = draft && !box ? pendingMsg(draft, comments.indexOf(draft)) : ''
@@ -612,18 +612,35 @@ function suggestionsHtml(html, path) {
       const code = tr.querySelector('.blob-code-inner')
       return { del: !!code?.classList.contains('blob-code-deletion'), num: tr.querySelector('[data-line-number]')?.getAttribute('data-line-number') ?? '', text: code?.textContent ?? '' }
     })
-    const del = rows.filter(r => r.del)
-    const add = rows.filter(r => !r.del)
-    const lines = [...highlight(del.map(r => r.text), language), ...highlight(add.map(r => r.text), language)]
-    const body = [...del, ...add]
-      .map((r, i) => `<tr class="${r.del ? 'sg-del' : 'sg-add'}"><td class="sg-num">${esc(r.num)}</td><td class="sg-sign">${r.del ? '−' : '+'}</td><td class="sg-code">${lines[i]}</td></tr>`)
-      .join('')
     const box = document.createElement('div')
     box.className = 'suggestion'
-    box.innerHTML = `<div class="suggestion-head">Suggested change</div><table><tbody>${body}</tbody></table>`
+    box.innerHTML = suggestionTable(rows.filter(r => r.del), rows.filter(r => !r.del), language)
     blob.replaceWith(box)
   }
   return template.innerHTML
+}
+
+function suggestionTable(del, add, language) {
+  const lines = [...highlight(del.map(r => r.text), language), ...highlight(add.map(r => r.text), language)]
+  const body = [...del, ...add]
+    .map((r, i) => `<tr class="${r.del ? 'sg-del' : 'sg-add'}"><td class="sg-num">${esc(r.num)}</td><td class="sg-sign">${r.del ? '−' : '+'}</td><td class="sg-code">${lines[i]}</td></tr>`)
+    .join('')
+  return `<div class="suggestion-head">Suggested change</div><table><tbody>${body}</tbody></table>`
+}
+
+function bodyWithSuggestions(c) {
+  if (!c.code || !c.text.includes('```suggestion')) return esc(c.text)
+  const first = c.start ?? c.line
+  const language = LANGUAGES[c.path.split('.').pop()?.toLowerCase() ?? '']
+  const old = c.code.split('\n').map((text, i) => ({ del: true, num: String(first + i), text }))
+  return c.text
+    .split(/\n?```suggestion\n([\s\S]*?)\n?```\n?/)
+    .map((part, i) =>
+      i % 2
+        ? `<div class="suggestion">${suggestionTable(old, part.split('\n').map((text, k) => ({ del: false, num: String(first + k), text })), language)}</div>`
+        : esc(part),
+    )
+    .join('')
 }
 
 function noteBox(thread, inReview) {
@@ -1130,7 +1147,7 @@ function renderHeader() {
       pr
         ? prInfo(pr)
         : `<div class="pr-info"><span class="state none">No PR yet</span>
-            ${state.untracked ? '' : '<button class="btn small" data-act="submit-branch">Submit as draft PR</button>'}</div>`
+            <button class="btn small" data-act="submit-branch">${submitLabel()}</button></div>`
     }
     <h1>${title}</h1>
     <div class="meta">
@@ -1615,6 +1632,8 @@ async function waitForDelivery(id, seconds = 60) {
   return null
 }
 
+const submitLabel = () => (state.untracked ? 'Open draft PR' : 'Submit as draft PR')
+
 async function submitBranch(button) {
   button.disabled = true
   button.textContent = 'Asking Claude…'
@@ -1627,7 +1646,7 @@ async function submitBranch(button) {
   setTimeout(() => {
     if (!button.isConnected) return
     button.disabled = false
-    button.textContent = 'Submit as draft PR'
+    button.textContent = submitLabel()
   }, 5000)
 }
 
