@@ -1273,8 +1273,21 @@ async function pollReviewActions($: Engine, port: number) {
         const current = await read($, snapshot)
         const rows = current.rows
         const row = rows.find(r => r.branch === action.branch && !r.isTrunk)
-        if (current.untracked) results[action.id] = { ok: false, message: 'This branch is not tracked by Graphite yet.' }
-        else if (!row) results[action.id] = { ok: false, message: 'That branch is not part of the stack.' }
+        if (!row) results[action.id] = { ok: false, message: 'That branch is not part of the stack.' }
+        else if (current.untracked) {
+          const trunk = trunkOf(rows) ?? 'main'
+          const steps = [
+            row.branch === trunk ? `create a new branch from the uncommitted changes on ${trunk}` : '',
+            row.isCurrent ? 'commit any uncommitted changes' : '',
+            `push the branch and open a draft PR against ${trunk.replace(/^origin\//, '')} with \`gh pr create --draft\``,
+          ].filter(Boolean)
+          await queuePrompt(
+            $,
+            `Open a PR for ${row.branch === trunk ? `the uncommitted changes on ${trunk}` : `\`${row.branch}\``}: ${steps.join(', then ')}. ` +
+              "Follow this repo's commit and PR conventions, and don't change any code.",
+          )
+          results[action.id] = { ok: true, data: { queued: turnRunning } }
+        }
         else {
           await queuePrompt(
             $,
