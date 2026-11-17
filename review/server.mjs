@@ -159,7 +159,9 @@ async function fileFor(query) {
       return { error: 'unreadable' }
     }
   }
-  const shown = await git(['show', `${row.branch}:${path}`])
+  const ref = query.get('ref')
+  if (ref && !/^([0-9a-f]{7,40}|HEAD)$/.test(ref)) return { error: 'unknown ref' }
+  const shown = await git(['show', `${ref || row.branch}:${path}`])
   return shown.ok ? { text: shown.stdout } : { error: 'unreadable' }
 }
 

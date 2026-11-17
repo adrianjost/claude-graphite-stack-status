@@ -1860,3 +1860,11 @@ td.ln[data-line]:has(+ td.code:hover) {
 .hljs-meta {
   color: var(--muted);
 }
+
+.svg-preview { display: flex; gap: 16px; padding: 16px; border-bottom: 1px solid var(--border-muted); }
+.svg-preview figure { flex: 1; margin: 0; min-width: 0; text-align: center; }
+.svg-preview figcaption { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.svg-preview img {
+  max-width: 100%; max-height: 240px; min-height: 96px; object-fit: contain; padding: 12px; border: 1px solid var(--border-muted); border-radius: 6px;
+  background: #fff repeating-conic-gradient(#0000000f 0 25%, transparent 0 50%) 0 0 / 16px 16px;
+}

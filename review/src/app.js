@@ -80,6 +80,7 @@ const prefs = {
   whitespace: stored('whitespace', false),
   compare: stored('compare', 'parent'),
   showSent: stored('showSent', true),
+  showDismissed: stored('showDismissed', false),
   uncommitted: { true: 'all', false: 'committed' }[stored('uncommitted', 'all')] ?? stored('uncommitted', 'all'),
 }
 if (prefs.format !== 'unified' && prefs.format !== 'split') prefs.format = 'split'
@@ -102,6 +103,7 @@ const lastBox = () => composers.findLast(c => !c.replyTo)
 let shownHeavy = new Set()
 let collapsed = new Set()
 let expansions = new Map()
+let previews = new Map()
 let pending = new Map()
 
 const api = (path, init) =>
@@ -442,6 +444,7 @@ const changesKey = c => `${c.answer.from}..${c.answer.to}|${c.kind && !isFile(c)
 
 const hasAnswer = c => !!(c.answer?.status || c.answer?.from)
 const sentClass = c => `comment sent${hasAnswer(c) ? ' answered' : ''}`
+const shown = c => !c.dismissedAt || prefs.showDismissed
 const refTag = c => (c.answer?.ref ? `<span class="ref">${esc(c.answer.ref)}</span>` : '')
 const threadsOf = list => {
   const ids = new Set(list.map(c => c.id))
@@ -462,6 +465,13 @@ function followUpMeta(parentId) {
   return { parentRef: parent?.answer?.ref, context: parent ? clip((parent.answer?.text || parent.text).replace(/\s+/g, ' ')) : undefined }
 }
 
+function dismissButton(c, title = 'Dismiss') {
+  const index = sent.indexOf(c)
+  return c.dismissedAt
+    ? `<button class="btn invisible" data-restore="${index}" title="Show this again">Restore</button>`
+    : `<button class="btn invisible" data-dismiss="${index}" title="${title}">Dismiss</button>`
+}
+
 function sentThread(chain) {
   const root = chain[0]
   const leaf = chain.at(-1)
@@ -470,12 +480,12 @@ function sentThread(chain) {
   const outdated = !isFile(root) && codeAt(root) !== (root.code ?? '')
   const msgs = chain
     .map(
-      c => `<div class="msg"><div class="comment-head"><strong>You</strong>${refTag(c)}<span class="badge sent">Sent to Claude</span>${answerBadge(c)}${c === root && outdated ? '<span class="badge">Outdated</span>' : ''}<span>${esc(timeAgo(c.sentAt))}</span><span class="spacer"></span>${c === root ? `<button class="btn invisible" data-dismiss="${sent.indexOf(c)}" title="${chain.length > 1 ? 'Dismiss this conversation' : 'Dismiss'}">Dismiss</button>` : ''}</div>
+      c => `<div class="msg"><div class="comment-head"><strong>You</strong>${refTag(c)}<span class="badge sent">Sent to Claude</span>${answerBadge(c)}${c === root && outdated ? '<span class="badge">Outdated</span>' : ''}${c === root && root.dismissedAt ? '<span class="badge">Dismissed</span>' : ''}<span>${esc(timeAgo(c.sentAt))}</span><span class="spacer"></span>${c === root ? dismissButton(c, chain.length > 1 ? 'Dismiss this conversation' : 'Dismiss') : ''}</div>
         <div class="comment-body">${bodyWithSuggestions(c)}</div>${answerBlock(c)}</div>`,
     )
     .join('')
   const pendingFollowUp = draft && !box ? pendingMsg(draft, comments.indexOf(draft)) : ''
-  const field = draft || box ? '' : `<div class="reply-field"><input readonly data-reply-field="${sent.indexOf(leaf)}" placeholder="Reply to Claude…"></div>`
+  const field = draft || box || root.dismissedAt ? '' : `<div class="reply-field"><input readonly data-reply-field="${sent.indexOf(leaf)}" placeholder="Reply to Claude…"></div>`
   return `<div class="${sentClass(root)} thread${chain.some(hasAnswer) || draft || box ? ' answered' : ''}">${msgs}${pendingFollowUp}${box ? composerBox(box) : field}</div>`
 }
 
@@ -686,6 +696,7 @@ function threadRows(path, targets, colspan) {
       html += row(pendingCard(comment, comments.indexOf(comment)), target.side)
     }
     for (const chain of threadsOf(sent.filter(c => c.kind !== 'thread' && sameTarget(c, at)))) {
+      if (!shown(chain[0])) continue
       if (prefs.showSent || comments.some(c => c.replyTo === chain.at(-1).id) || composers.some(c => c.replyTo === chain.at(-1).id)) html += row(sentThread(chain), target.side)
     }
     const box = composerAt(at)
@@ -759,6 +770,7 @@ function fileComments(path, openOnly = false) {
     html += pendingCard(comment, comments.indexOf(comment))
   }
   for (const chain of threadsOf(sent.filter(c => isFile(c) && c.path === path))) {
+    if (!shown(chain[0])) continue
     if (prefs.showSent || comments.some(c => c.replyTo === chain.at(-1).id) || composers.some(c => c.replyTo === chain.at(-1).id)) html += sentThread(chain)
   }
   const box = composerAt(at)
@@ -774,14 +786,40 @@ function fileBody(file) {
   return top + strandedComments(file.path, c => renderedTargets.has(targetKey(c))) + strandedThreads(file.path, t => renderedThreads.has(t.id)) + body
 }
 
+function svgPreview(file) {
+  const shot = previews.get(file.path)
+  if (!shot) {
+    previews.set(file.path, {})
+    loadPreview(file)
+    return ''
+  }
+  const pane = (label, text) =>
+    text === undefined ? '' : `<figure><figcaption>${label}</figcaption><img alt="${label}" src="data:image/svg+xml;charset=utf-8,${encodeURIComponent(text)}"></figure>`
+  const html = pane('Before', shot.old) + pane('After', shot.new)
+  return html ? `<div class="svg-preview">${html}</div>` : ''
+}
+
+async function loadPreview(file) {
+  const map = previews
+  const read = params => api(`/file?${new URLSearchParams(params)}`).then(r => r.text).catch(() => undefined)
+  const [old, now] = await Promise.all([
+    file.status === 'added' ? undefined : read({ branch: selected, path: file.oldPath ?? file.path, ref: current?.mode === 'uncommitted' ? 'HEAD' : (current?.base ?? '') }),
+    file.status === 'deleted' ? undefined : read({ branch: selected, path: file.path, worktree: current?.includeWorktree ? '1' : '0' }),
+  ])
+  if (previews !== map) return
+  previews.set(file.path, { old, new: now })
+  if (old !== undefined || now !== undefined) rerenderFile(file.path)
+}
+
 function fileBodyInner(file) {
   if (file.binary) return '<div class="placeholder">Binary file not shown</div>'
   if (file.isHeavy && !shownHeavy.has(file.path)) {
     return `<div class="placeholder">${file.isGenerated ? 'Generated file' : 'Large diff'} not rendered by default.
       <button class="btn" data-show="${esc(file.path)}">Load diff</button></div>`
   }
+  const preview = /\.svg$/i.test(file.path) ? svgPreview(file) : ''
   if (!file.hunks.length) {
-    return `<div class="placeholder">${file.status === 'renamed' ? 'File renamed without changes' : 'No content changes'}</div>`
+    return preview || `<div class="placeholder">${file.status === 'renamed' ? 'File renamed without changes' : 'No content changes'}</div>`
   }
   const split = prefs.format === 'split' && file.status !== 'added' && file.status !== 'deleted'
   const expanded = expansions.get(file.path) ?? { gaps: new Set(), end: false }
@@ -821,7 +859,7 @@ function fileBodyInner(file) {
     : isHalf(file)
       ? '<col class="num"><col>'
       : '<col class="num"><col class="num"><col>'
-  return `<table class="diff ${split ? 'split' : 'unified'}"><colgroup>${cols}</colgroup><tbody>${rows}</tbody></table>`
+  return `${preview}<table class="diff ${split ? 'split' : 'unified'}"><colgroup>${cols}</colgroup><tbody>${rows}</tbody></table>`
 }
 
 function bars(file) {
@@ -984,10 +1022,10 @@ function renderDescriptionThreads() {
       <div class="comment-body">${quote(c.quote)}${esc(c.text)}</div></div>`
   })
   if (prefs.showSent) {
-    sent.forEach((c, index) => {
-      if (c.kind !== 'description') return
-      html += `<div class="${sentClass(c)}"><div class="comment-head"><strong>You</strong><span class="badge sent">Sent to Claude</span>${answerBadge(c)}<span>${esc(timeAgo(c.sentAt))}</span><span class="spacer"></span>
-        <button class="btn invisible" data-dismiss="${index}">Dismiss</button></div>
+    sent.forEach(c => {
+      if (c.kind !== 'description' || !shown(c)) return
+      html += `<div class="${sentClass(c)}"><div class="comment-head"><strong>You</strong><span class="badge sent">Sent to Claude</span>${answerBadge(c)}${c.dismissedAt ? '<span class="badge">Dismissed</span>' : ''}<span>${esc(timeAgo(c.sentAt))}</span><span class="spacer"></span>
+        ${dismissButton(c)}</div>
         <div class="comment-body">${quote(c.quote)}${esc(c.text)}</div>${answerBlock(c)}</div>`
     })
   }
@@ -1256,6 +1294,7 @@ async function loadDiff(force = false) {
     return
   }
   renderedKey = key
+  previews = new Map()
   files = result.error ? [] : parseFiles(result.diff ?? '')
   pending = new Map(
     parseFiles(result.pending ?? '').map(file => [
@@ -1317,7 +1356,7 @@ function commentItems(list, kind, followUps = new Map()) {
     }`
   for (const [branch, items] of groups) {
     html += `<div class="group-head">${esc(branch)}</div>`
-    for (const chain of kind === 'sent' ? threadsOf(items) : items.map(c => [c])) {
+    for (const chain of kind === 'sent' ? threadsOf(items).filter(chain => shown(chain[0])) : items.map(c => [c])) {
       const comment = chain[0]
       jumps.push(comment)
       const last = chain.at(-1)
@@ -1332,7 +1371,7 @@ function commentItems(list, kind, followUps = new Map()) {
         }</code>
           ${
             kind === 'sent'
-              ? `${answerBadge(last)}<span class="muted">${esc(timeAgo(last.sentAt))}</span>`
+              ? `${answerBadge(last)}${comment.dismissedAt ? '<span class="badge">Dismissed</span>' : ''}<span class="muted">${esc(timeAgo(last.sentAt))}</span>`
               : `${comment.replyTo ? '<span class="muted">follow-up</span>' : ''}<button class="btn invisible delete-item" data-remove-at="${jumps.length - 1}" title="Delete this comment">Delete</button>`
           }</div>
         ${chain.map(text).join('')}${draft ? `<div class="text"><span class="badge">Pending</span> ${esc(draft.text)}</div>` : ''}</div>`
@@ -1344,7 +1383,7 @@ function commentItems(list, kind, followUps = new Map()) {
 function renderCommentViews() {
   jumps = []
   const pendingAll = collect('comments')
-  const sentAll = collect('sent')
+  const sentAll = collect('sent').filter(shown)
   const layer = pendingAll.filter(c => c.branch === selected)
   $('#submit-list').innerHTML = layer.length
     ? `<div class="list-head">${layer.length} pending comment${layer.length === 1 ? '' : 's'} on this layer</div>${commentItems(layer, 'pending')}`
@@ -1358,6 +1397,8 @@ function renderCommentViews() {
     `<div class="list-head">Sent to Claude (${sentAll.length})${sentAll.length ? '<button class="btn invisible" data-act="clear-sent">Clear</button>' : ''}</div>${commentItems(sentAll, 'sent', new Map(pendingAll.filter(c => c.replyTo).map(c => [c.replyTo, c]))) || '<div class="empty-note">Comments you send stay here as a history.</div>'}`
   const toggle = document.querySelector('[data-toggle="show-sent"]')
   if (toggle) toggle.checked = prefs.showSent
+  const dismissedToggle = document.querySelector('[data-toggle="show-dismissed"]')
+  if (dismissedToggle) dismissedToggle.checked = prefs.showDismissed
 }
 
 function applyJump() {
@@ -1956,7 +1997,7 @@ document.addEventListener('click', event => {
   const head = t.closest('.file-head')
   const headToggle =
     head && !t.closest('button, label, input, a') && window.getSelection()?.isCollapsed !== false ? head.querySelector('[data-collapse]') : null
-  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-file-comment],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-jump],[data-describe-edit],[data-send-now],[data-remove-at],[data-thread-act],[data-changes]')
+  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-file-comment],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-restore],[data-jump],[data-describe-edit],[data-send-now],[data-remove-at],[data-thread-act],[data-changes]')
   if (!t.closest('#submit') && !t.closest('[data-act="review"]')) $('#submit').hidden = true
   if (!el) return
   const d = el.dataset
@@ -2028,8 +2069,9 @@ document.addEventListener('click', event => {
   if (d.dismiss) {
     const root = sent[Number(d.dismiss)]
     const gone = new Set(threadsOf(sent).find(chain => chain[0] === root)?.map(c => c.id))
-    sent = sent.filter(c => c !== root && !(c.id && gone.has(c.id)))
-    store(`sent:${selected}`, sent.length ? sent : undefined)
+    const dismissedAt = Date.now()
+    sent = sent.map(c => (c === root || (c.id && gone.has(c.id)) ? { ...c, dismissedAt } : c))
+    store(`sent:${selected}`, sent)
     if (comments.some(c => gone.has(c.replyTo)) || composers.some(c => gone.has(c.replyTo))) {
       comments = comments.filter(c => !gone.has(c.replyTo))
       composers = composers.filter(c => !gone.has(c.replyTo))
@@ -2037,6 +2079,15 @@ document.addEventListener('click', event => {
       saveDraft()
       renderHeader()
     }
+    if (root) rerenderFile(root.path)
+    renderCommentViews()
+    renderDescriptionThreads()
+  }
+  if (d.restore) {
+    const root = sent[Number(d.restore)]
+    const back = new Set(threadsOf(sent).find(chain => chain[0] === root)?.map(c => c.id))
+    sent = sent.map(c => (c === root || (c.id && back.has(c.id)) ? { ...c, dismissedAt: undefined } : c))
+    store(`sent:${selected}`, sent)
     if (root) rerenderFile(root.path)
     renderCommentViews()
     renderDescriptionThreads()
@@ -2185,6 +2236,13 @@ document.addEventListener('change', event => {
     prefs.showSent = t.checked
     store('showSent', t.checked ? undefined : false)
     renderDiff()
+  }
+  if (t.dataset.toggle === 'show-dismissed') {
+    prefs.showDismissed = t.checked
+    store('showDismissed', t.checked || undefined)
+    renderDiff()
+    renderCommentViews()
+    renderDescriptionThreads()
   }
 })
 
