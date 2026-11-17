@@ -26,7 +26,7 @@ const LANGUAGES = {
   json: 'json', css: 'css', scss: 'scss', less: 'less', md: 'markdown', yml: 'yaml', yaml: 'yaml',
   sh: 'bash', bash: 'bash', zsh: 'bash', py: 'python', go: 'go', rs: 'rust', rb: 'ruby',
   java: 'java', kt: 'kotlin', swift: 'swift', sql: 'sql', graphql: 'graphql', gql: 'graphql',
-  php: 'php', c: 'c', h: 'c', cpp: 'cpp', toml: 'ini', ini: 'ini',
+  php: 'php', c: 'c', h: 'c', cpp: 'cpp', toml: 'ini', ini: 'ini', diff: 'diff', patch: 'diff',
 }
 
 const stored = (key, fallback) => {

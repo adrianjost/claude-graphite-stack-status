@@ -1846,3 +1846,17 @@ td.ln[data-line]:has(+ td.code:hover) {
   font-size: 13px;
   cursor: text;
 }
+
+.hljs-addition {
+  color: var(--add);
+  background: var(--add-word);
+}
+
+.hljs-deletion {
+  color: var(--del);
+  background: var(--del-word);
+}
+
+.hljs-meta {
+  color: var(--muted);
+}
