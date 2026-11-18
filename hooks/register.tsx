@@ -705,7 +705,7 @@ async function buildRows($: Engine, cwd: string, branch: string): Promise<Built 
 function requestRefresh($: Engine, mode: Mode) {
   pendingMode = stronger(pendingMode, mode)
   if (scheduled) return
-  const wait = pendingMode === 'local' ? LOCAL_DELAY_MS : Math.max(0, lastGithubAt + MIN_GAP_MS - Date.now())
+  const wait = pendingMode === 'github' ? Math.max(0, lastGithubAt + MIN_GAP_MS - Date.now()) : LOCAL_DELAY_MS
   scheduled = $.clock.after(Math.max(1, wait), () => {
     scheduled = undefined
     const run = pendingMode ?? 'local'
@@ -976,8 +976,26 @@ async function setReviewers($: Engine, action: ReviewersSetAction): Promise<Acti
     ...(add.length ? ['--add-reviewer', add.join(',')] : []),
     ...(remove.length ? ['--remove-reviewer', remove.join(',')] : []),
   ])
+  if (result.exitCode !== 0) {
+    requestRefresh($, 'force')
+    return { ok: false, message: (result.stderr || result.stdout).trim().split('\n')[0] }
+  }
+  const patch = <T extends PrInfo | null | undefined>(pr: T): T => {
+    if (pr?.number !== action.number) return pr
+    const kept = (pr.reviewers ?? []).filter(r => !remove.includes(r.name))
+    const reviewers = [...kept, ...add.filter(name => !kept.some(r => r.name === name)).map(name => ({ name, state: 'REQUESTED' }))]
+    return { ...pr, reviewers, hasReviewers: reviewers.length > 0 }
+  }
+  await update($, snapshot, s => ({ ...s, rows: s.rows.map(row => (row.pr ? { ...row, pr: patch(row.pr) } : row)) }))
+  const repo = await githubRepo($, cwd)
+  const shared = repo ? ((await $.store.get(`prs:${repo.owner}/${repo.name}`)) as SharedCache | undefined) : undefined
+  if (repo && shared) {
+    for (const cached of Object.values(shared)) cached.pr = patch(cached.pr)
+    await $.store.set(`prs:${repo.owner}/${repo.name}`, shared)
+  }
+  schedulePushReview($)
   requestRefresh($, 'force')
-  return result.exitCode === 0 ? { ok: true } : { ok: false, message: (result.stderr || result.stdout).trim().split('\n')[0] }
+  return { ok: true }
 }
 async function setThreadResolved($: Engine, action: ThreadResolveAction): Promise<ActionResult> {
   const store = await threadStore($)

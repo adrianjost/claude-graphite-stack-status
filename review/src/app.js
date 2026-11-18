@@ -1956,7 +1956,21 @@ async function closePicker() {
   const remove = [...initial].filter(l => !selected.has(l))
   if (!add.length && !remove.length) return
   $('#notice').textContent = 'Updating reviewers on GitHub…'
+  const before = state
+  state = {
+    ...state,
+    rows: state.rows.map(row => {
+      if (row.pr?.number !== number) return row
+      const kept = (row.pr.reviewers ?? []).filter(r => !remove.includes(r.name))
+      return { ...row, pr: { ...row.pr, reviewers: [...kept, ...add.filter(name => !kept.some(r => r.name === name)).map(name => ({ name, state: 'REQUESTED' }))] } }
+    }),
+  }
+  renderHeader()
   const result = await runAction({ type: 'reviewers-set', number, add, remove }).catch(() => null)
+  if (!result?.ok && state.version === before.version) {
+    state = before
+    renderHeader()
+  }
   $('#notice').textContent = !result
     ? 'Claude Code did not answer: reviewers were not changed.'
     : result.ok
