@@ -1670,16 +1670,19 @@ const diffText = (diff: { added: number; removed: number }) => [`+${diff.added}`
 const DIFF_FONT = 11
 const DIFF_CHAR = DIFF_FONT * 0.6
 
-function diffSvg(diff: { added: number; removed: number }, chars: number) {
-  const width = Math.ceil(chars * DIFF_CHAR) + 2
+const diffWidth = (cols: { added: number; removed: number }) => Math.ceil((cols.added + 1 + cols.removed) * DIFF_CHAR) + 2
+
+function diffSvg(diff: { added: number; removed: number }, cols: { added: number; removed: number }) {
+  const width = diffWidth(cols)
   const [added, removed] = diffText(diff)
+  const split = cols.added * DIFF_CHAR + 1
   return {
     width,
     alt: `${diff.added} lines added, ${diff.removed} removed`,
     source:
       `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${ROW}" viewBox="0 0 ${width} ${ROW}">` +
-      `<text x="${width}" y="${ROW / 2}" dy="0.35em" text-anchor="end" font-size="${DIFF_FONT}" font-family="${MONO}">` +
-      `<tspan fill="${DOT.open}">${added}</tspan><tspan fill="${DOT.closed}" dx="${DIFF_CHAR}">${removed}</tspan></text></svg>`,
+      `<text x="${split}" y="${ROW / 2}" dy="0.35em" text-anchor="end" font-size="${DIFF_FONT}" font-family="${MONO}" fill="${DOT.open}">${added}</text>` +
+      `<text x="${split + DIFF_CHAR}" y="${ROW / 2}" dy="0.35em" font-size="${DIFF_FONT}" font-family="${MONO}" fill="${DOT.closed}">${removed}</text></svg>`,
   }
 }
 
@@ -1919,10 +1922,8 @@ export const register: Register = on => {
     const behind = new Set(s.rows.filter(row => row.needsRestack).map(row => row.branch))
     const prs = s.rows.filter(row => row.pr)
     const failing = prs.filter(row => row.pr?.ci === 'fail').length
-    const diffChars = Math.max(
-      0,
-      ...s.rows.map(row => (row.diff ? diffText(row.diff).join(' ').length : 0)),
-    )
+    const texts = s.rows.flatMap(row => (row.diff ? [diffText(row.diff)] : []))
+    const diffCols = { added: Math.max(0, ...texts.map(t => t[0]?.length ?? 0)), removed: Math.max(0, ...texts.map(t => t[1]?.length ?? 0)) }
     const layout = metaLayout(prs.flatMap(row => (row.pr ? [row.pr] : [])))
     const newVersion = await read($, updateInfo)
     const summary = [
@@ -2107,13 +2108,13 @@ export const register: Register = on => {
                   ))}
                 </Box>
               )}
-              {diffChars > 0 && (() => {
+              {diffCols.added > 0 && (() => {
                 if (!row.diff || row.isTrunk) {
-                  const width = Math.ceil(diffChars * DIFF_CHAR) + 2
+                  const width = diffWidth(diffCols)
                   const blank = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${ROW}"></svg>`
                   return <Svg source={blank} alt="no changes" width={width} height={ROW} />
                 }
-                const stat = diffSvg(row.diff, diffChars)
+                const stat = diffSvg(row.diff, diffCols)
                 return (
                   <Box key={`diff-${row.branch}`} flexShrink={0} justifyContent="flex-end">
                     <Svg source={stat.source} alt={stat.alt} width={stat.width} height={ROW} />
