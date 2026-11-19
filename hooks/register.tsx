@@ -1815,7 +1815,6 @@ export const register: Register = on => {
     await update($, sessionStart, at => at ?? Date.now())
     const stored = await $.store.get('linkTarget')
     if (stored === 'github' || stored === 'graphite' || stored === 'review') await update($, linkTarget, () => stored)
-    if (stored === 'review') void startReview($)
     void checkUpdate($)
     await $.command.register({
       name: 'stack',
@@ -1922,9 +1921,7 @@ export const register: Register = on => {
     const links = await read($, linkTarget)
     const busy = await read($, working)
     const behind = new Set(s.rows.filter(row => row.needsRestack).map(row => row.branch))
-    const reviewPage = links === 'review' ? await read($, reviewUrl) : null
-    const prUrl = (pr: PrInfo, branch: string) =>
-      reviewPage ? `${reviewPage}#branch=${encodeURIComponent(branch)}` : links === 'graphite' ? graphiteUrl(pr) : pr.url
+    const prUrl = (pr: PrInfo) => (links === 'graphite' ? graphiteUrl(pr) : pr.url)
     const prs = s.rows.filter(row => row.pr)
     const failing = prs.filter(row => row.pr?.ci === 'fail').length
     const diffChars = Math.max(
@@ -1976,7 +1973,6 @@ export const register: Register = on => {
             ]}
             onSelect={value => {
               const target: LinkTarget = value === 'graphite' || value === 'review' ? value : 'github'
-              if (target === 'review') void startReview($)
               void update($, linkTarget, () => target)
               void $.store.set('linkTarget', target)
             }}
@@ -2070,7 +2066,11 @@ export const register: Register = on => {
               </Box>
               <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
                 {pr ? (
-                  <Link href={prUrl(pr, row.branch)}><Text wrap="truncate-end">{pr.title}</Text></Link>
+                  links === 'review' ? (
+                    <Button key={`open-${row.branch}`} plain label={pr.title} onPress={() => void openReview($, row.branch)} />
+                  ) : (
+                    <Link href={prUrl(pr)}><Text wrap="truncate-end">{pr.title}</Text></Link>
+                  )
                 ) : row.uncommittedOnly ? (
                   <Text dimColor italic wrap="truncate-end">uncommitted changes on {row.branch}</Text>
                 ) : (
