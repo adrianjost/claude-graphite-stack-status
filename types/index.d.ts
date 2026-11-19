@@ -1,4 +1,4 @@
-export type LinkTarget = 'github' | 'graphite'
+export type LinkTarget = 'github' | 'graphite' | 'review'
 
 export type UpdateInfo = { version: string; url: string; state: 'available' | 'updating' | 'installed' }
 

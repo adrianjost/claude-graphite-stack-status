@@ -1351,7 +1351,7 @@ const UPDATE_COMMANDS = [
   ['claude', 'plugin', 'marketplace', 'update', 'adrianjost'],
   ['claude', 'plugin', 'update', 'graphite-stack@adrianjost'],
 ]
-const DAY_MS = 24 * 60 * 60_000
+const UPDATE_CHECK_MS = 6 * 60 * 60_000
 let updateTimer: Timer | undefined
 
 function isNewer(a: string, b: string) {
@@ -1360,20 +1360,30 @@ function isNewer(a: string, b: string) {
   return false
 }
 
+async function fetchRelease($: Engine) {
+  type Release = { tag_name?: string; html_url?: string }
+  const response = await $.http.fetch(RELEASES, { headers: { accept: 'application/vnd.github+json' } }).catch(() => undefined)
+  if (response?.ok) return JSON.parse(response.text) as Release
+  const viaGh = await $.process.run(['gh', 'api', RELEASES.replace('https://api.github.com/', '')], { timeoutMs: 20_000 }).catch(() => undefined)
+  return viaGh?.exitCode === 0 ? (JSON.parse(viaGh.stdout) as Release) : undefined
+}
+
 async function checkUpdate($: Engine) {
   updateTimer?.cancel()
-  updateTimer = $.clock.after(6 * 60 * 60_000, () => void checkUpdate($))
+  updateTimer = $.clock.after(UPDATE_CHECK_MS, () => void checkUpdate($))
   try {
     const current = (JSON.parse(await $.fs.read(`${$.plugin.root}/.claude-plugin/plugin.json`)) as { version?: string }).version
     if (!current) return
     let latest = (await $.store.get('latestRelease')) as { at: number; version: string; url: string } | undefined
-    if (!latest || Date.now() - latest.at > DAY_MS) {
-      const response = await $.http.fetch(RELEASES, { headers: { accept: 'application/vnd.github+json' } })
-      const release = response.ok ? (JSON.parse(response.text) as { tag_name?: string; html_url?: string }) : {}
-      const version = release.tag_name?.replace(/^v/, '')
-      latest = { at: Date.now(), version: version ?? latest?.version ?? current, url: release.html_url ?? latest?.url ?? '' }
-      await $.store.set('latestRelease', latest)
+    if (!latest || Date.now() - latest.at > UPDATE_CHECK_MS) {
+      const release = await fetchRelease($)
+      const version = release?.tag_name?.replace(/^v/, '')
+      if (version) {
+        latest = { at: Date.now(), version, url: release?.html_url ?? '' }
+        await $.store.set('latestRelease', latest)
+      }
     }
+    if (!latest) return
     const available = isNewer(latest.version, current) && (await $.store.get('dismissedRelease')) !== latest.version
     await update($, updateInfo, info => (available ? { version: latest.version, url: latest.url, state: info?.version === latest.version ? info.state : 'available' } : null))
     if (available && (await $.store.get('notifiedRelease')) !== latest.version) {
@@ -1804,7 +1814,8 @@ export const register: Register = on => {
     const started = await next(e)
     await update($, sessionStart, at => at ?? Date.now())
     const stored = await $.store.get('linkTarget')
-    if (stored === 'github' || stored === 'graphite') await update($, linkTarget, () => stored)
+    if (stored === 'github' || stored === 'graphite' || stored === 'review') await update($, linkTarget, () => stored)
+    if (stored === 'review') void startReview($)
     void checkUpdate($)
     await $.command.register({
       name: 'stack',
@@ -1911,7 +1922,9 @@ export const register: Register = on => {
     const links = await read($, linkTarget)
     const busy = await read($, working)
     const behind = new Set(s.rows.filter(row => row.needsRestack).map(row => row.branch))
-    const prUrl = (pr: PrInfo) => (links === 'graphite' ? graphiteUrl(pr) : pr.url)
+    const reviewPage = links === 'review' ? await read($, reviewUrl) : null
+    const prUrl = (pr: PrInfo, branch: string) =>
+      reviewPage ? `${reviewPage}#branch=${encodeURIComponent(branch)}` : links === 'graphite' ? graphiteUrl(pr) : pr.url
     const prs = s.rows.filter(row => row.pr)
     const failing = prs.filter(row => row.pr?.ci === 'fail').length
     const diffChars = Math.max(
@@ -1959,9 +1972,11 @@ export const register: Register = on => {
             options={[
               { value: 'github', label: 'GitHub' },
               { value: 'graphite', label: 'Graphite' },
+              { value: 'review', label: 'Review page' },
             ]}
             onSelect={value => {
-              const target: LinkTarget = value === 'graphite' ? 'graphite' : 'github'
+              const target: LinkTarget = value === 'graphite' || value === 'review' ? value : 'github'
+              if (target === 'review') void startReview($)
               void update($, linkTarget, () => target)
               void $.store.set('linkTarget', target)
             }}
@@ -2055,7 +2070,7 @@ export const register: Register = on => {
               </Box>
               <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
                 {pr ? (
-                  <Link href={prUrl(pr)}><Text wrap="truncate-end">{pr.title}</Text></Link>
+                  <Link href={prUrl(pr, row.branch)}><Text wrap="truncate-end">{pr.title}</Text></Link>
                 ) : row.uncommittedOnly ? (
                   <Text dimColor italic wrap="truncate-end">uncommitted changes on {row.branch}</Text>
                 ) : (
