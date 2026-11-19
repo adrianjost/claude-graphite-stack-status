@@ -1,4 +1,3 @@
-export type LinkTarget = 'github' | 'graphite' | 'review'
 
 export type UpdateInfo = { version: string; url: string; state: 'available' | 'updating' | 'installed' }
 
@@ -74,6 +73,6 @@ declare module 'claude-code' {
     'mcp__graphite-stack__review_reply': { fixed?: string[]; replies?: { ref: string; text: string }[] }
   }
   interface PluginState {
-    'graphite-stack': { snapshot: StackSnapshot; isHidden: boolean; linkTarget: LinkTarget; working: string | null; reviewUrl: string | null; waitingPrompts: WaitingPrompt[]; reviewReplies: Record<string, ReviewReply>; updateInfo: UpdateInfo | null; sessionStart: number | null }
+    'graphite-stack': { snapshot: StackSnapshot; isHidden: boolean; working: string | null; reviewUrl: string | null; waitingPrompts: WaitingPrompt[]; reviewReplies: Record<string, ReviewReply>; updateInfo: UpdateInfo | null; sessionStart: number | null }
   }
 }

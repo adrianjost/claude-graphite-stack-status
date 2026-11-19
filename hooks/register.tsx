@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface as Engine, Register, Timer } from 'claude-code'
 
-import type { CiState, Issue, Lane, LinkTarget, PrInfo, ReviewReply, StackRow, StackSnapshot, UpdateInfo, WaitingPrompt } from '../types'
+import type { CiState, Issue, Lane, PrInfo, ReviewReply, StackRow, StackSnapshot, UpdateInfo, WaitingPrompt } from '../types'
 
 const POLL_MS = 60_000
 const POLL_BUSY_MS = 30_000
@@ -14,7 +14,6 @@ const GITHUB_COMMAND = /\b(git\s+push|gt\s+(submit|ss|sync|merge|get|land|repo\s
 const EMPTY: StackSnapshot = { branch: '', rows: [], columns: 1, updatedAt: 0, isLoading: false }
 const snapshot = atom({ plugin: 'graphite-stack', key: 'snapshot' } as const, EMPTY)
 const isHidden = atom({ plugin: 'graphite-stack', key: 'isHidden' } as const, false)
-const linkTarget = atom({ plugin: 'graphite-stack', key: 'linkTarget' } as const, 'github' as LinkTarget)
 const working = atom({ plugin: 'graphite-stack', key: 'working' } as const, null as string | null)
 const reviewUrl = atom({ plugin: 'graphite-stack', key: 'reviewUrl' } as const, null as string | null)
 const waitingPrompts = atom({ plugin: 'graphite-stack', key: 'waitingPrompts' } as const, [] as WaitingPrompt[])
@@ -1813,8 +1812,6 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     await update($, sessionStart, at => at ?? Date.now())
-    const stored = await $.store.get('linkTarget')
-    if (stored === 'github' || stored === 'graphite' || stored === 'review') await update($, linkTarget, () => stored)
     void checkUpdate($)
     await $.command.register({
       name: 'stack',
@@ -1916,12 +1913,10 @@ export const register: Register = on => {
     if (e.surface !== 'desktop') return next(e)
     const elements = $.ui.resolve(e)
     if (!('Svg' in elements)) return next(e)
-    const { Box, Text, Button, Link, Svg, Select } = elements
+    const { Box, Text, Button, Link, Svg } = elements
 
-    const links = await read($, linkTarget)
     const busy = await read($, working)
     const behind = new Set(s.rows.filter(row => row.needsRestack).map(row => row.branch))
-    const prUrl = (pr: PrInfo) => (links === 'graphite' ? graphiteUrl(pr) : pr.url)
     const prs = s.rows.filter(row => row.pr)
     const failing = prs.filter(row => row.pr?.ci === 'fail').length
     const diffChars = Math.max(
@@ -1962,21 +1957,6 @@ export const register: Register = on => {
           <Text bold>Graphite stack</Text>
           <Text dimColor>{summary}</Text>
           <Box flexGrow={1} />
-          <Select
-            key="links"
-            label="Links"
-            value={links}
-            options={[
-              { value: 'github', label: 'GitHub' },
-              { value: 'graphite', label: 'Graphite' },
-              { value: 'review', label: 'Review page' },
-            ]}
-            onSelect={value => {
-              const target: LinkTarget = value === 'graphite' || value === 'review' ? value : 'github'
-              void update($, linkTarget, () => target)
-              void $.store.set('linkTarget', target)
-            }}
-          />
           <Button key="review" plain dimColor label="Review stack" onPress={() => void openReview($, s.branch)} />
           {!s.untracked && (
             <Button
@@ -2066,13 +2046,11 @@ export const register: Register = on => {
               </Box>
               <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
                 {pr ? (
-                  links === 'review' ? (
-                    <Button key={`open-${row.branch}`} plain label={pr.title} onPress={() => void openReview($, row.branch)} />
-                  ) : (
-                    <Link href={prUrl(pr)}><Text wrap="truncate-end">{pr.title}</Text></Link>
-                  )
+                  <Button key={`open-${row.branch}`} plain label={pr.title} onPress={() => void openReview($, row.branch)} />
                 ) : row.uncommittedOnly ? (
-                  <Text dimColor italic wrap="truncate-end">uncommitted changes on {row.branch}</Text>
+                  <Button key={`open-${row.branch}`} plain dimColor label={`uncommitted changes on ${row.branch}`} onPress={() => void openReview($, row.branch)} />
+                ) : !row.isTrunk ? (
+                  <Button key={`open-${row.branch}`} plain dimColor label={row.branch} onPress={() => void openReview($, row.branch)} />
                 ) : (
                   <Text dimColor italic={!row.isTrunk} wrap="truncate-end">{row.branch}</Text>
                 )}
@@ -2139,12 +2117,15 @@ export const register: Register = on => {
                 return (
                   <Box key={`diff-${row.branch}`} flexShrink={0} justifyContent="flex-end">
                     <Svg source={stat.source} alt={stat.alt} width={stat.width} height={ROW} />
-                    <Box position="absolute" top={0} right={0} display="none" hover={{ display: 'flex' }}>
-                      <Button key={`review-${row.branch}`} plain label="Review ↗" onPress={() => void openReview($, row.branch)} />
-                    </Box>
                   </Box>
                 )
               })()}
+              {prs.length > 0 && (
+                <Box key={`links-${row.branch}`} flexDirection="row" alignItems="center" gap={1} flexShrink={0} width={6}>
+                  {pr && <Link key={`gt-${row.branch}`} href={graphiteUrl(pr)} label="📚" />}
+                  {pr && <Link key={`gh-${row.branch}`} href={pr.url} label="🐙" />}
+                </Box>
+              )}
             </Box>
           )
         })}
