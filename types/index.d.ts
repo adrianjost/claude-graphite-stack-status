@@ -20,6 +20,7 @@ export type PrInfo = {
   url: string
   state: string
   isDraft: boolean
+  head?: string
   reviewDecision: string
   labels: { name: string; color: string; description?: string }[]
   ci: CiState
@@ -51,6 +52,8 @@ export type StackRow = {
   isTrunk: boolean
   needsRestack: boolean
   uncommittedOnly?: boolean
+  push?: 'ahead' | 'rewritten'
+  dirty?: boolean
   pr?: PrInfo
   diff?: { added: number; removed: number }
 }

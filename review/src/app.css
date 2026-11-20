@@ -222,7 +222,7 @@ a:hover {
   align-items: center;
   gap: 6px;
   height: 26px;
-  padding-right: 8px;
+  padding: 0 8px 0 4px;
   border-radius: 6px;
   cursor: pointer;
   white-space: nowrap;

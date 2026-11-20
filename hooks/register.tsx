@@ -10,7 +10,7 @@ const QUIET_AFTER_MS = 10 * 60_000
 const MIN_GAP_MS = 15_000
 const LOCAL_DELAY_MS = 1_500
 const SHARED_CACHE_MS = 55_000
-const GITHUB_COMMAND = /\b(git\s+push|gt\s+(submit|ss|sync|merge|get|land|repo\s+sync)|gh\s+pr)\b|\bgh\s+api\b[\s\S]*\b(un)?resolveReviewThread\b/
+const GITHUB_COMMAND = /\b(git\s+push|gt\s+(submit|ss|sync|merge|get|land|repo\s+sync)|gh\s+pr|gh\s+stack\s+(submit|push|sync))\b|\bgh\s+api\b[\s\S]*\b(un)?resolveReviewThread\b/
 const EMPTY: StackSnapshot = { branch: '', rows: [], columns: 1, updatedAt: 0, isLoading: false }
 const snapshot = atom({ plugin: 'graphite-stack', key: 'snapshot' } as const, EMPTY)
 const isHidden = atom({ plugin: 'graphite-stack', key: 'isHidden' } as const, false)
@@ -66,6 +66,7 @@ type GqlPr = {
   url: string
   state: string
   isDraft: boolean
+  headRefOid: string
   reviewDecision: string | null
   bodyHTML: string
   labels: { nodes: { name: string; color: string; description: string | null }[] }
@@ -76,7 +77,7 @@ type GqlPr = {
 }
 
 const PR_FIELDS =
-  'number title url state isDraft reviewDecision bodyHTML labels(first:20){nodes{name color description}} ' +
+  'number title url state isDraft headRefOid reviewDecision bodyHTML labels(first:20){nodes{name color description}} ' +
   'reviewRequests(first:20){totalCount nodes{requestedReviewer{... on User{login} ... on Bot{login} ... on Mannequin{login} ... on Team{name}}}} ' +
   'latestReviews(first:20){totalCount nodes{state author{login}}} reviewThreads(first:100){nodes{id isResolved isOutdated comments(last:1){totalCount nodes{id updatedAt}}}} ' +
   'commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ' +
@@ -132,6 +133,41 @@ async function exec($: Engine, cwd: string, argv: string[], timeoutMs = 30_000) 
 async function run($: Engine, cwd: string, argv: string[]) {
   const result = await exec($, cwd, argv)
   return result.exitCode === 0 ? result.stdout.trim() : undefined
+}
+
+async function pushState($: Engine, cwd: string, branch: string, pr?: PrInfo): Promise<StackRow['push']> {
+  if (!pr?.head || pr.state !== 'OPEN') return undefined
+  const local = await run($, cwd, ['git', 'rev-parse', branch])
+  if (!local || local === pr.head) return undefined
+  const contains = (a: string, b: string) => $.process.run(['git', 'merge-base', '--is-ancestor', a, b], { cwd }).then(r => r.exitCode === 0)
+  if (await contains(pr.head, local)) return 'ahead'
+  // behind GitHub, or GitHub has commits we never fetched: nothing safe to push
+  if (await contains(local, pr.head)) return undefined
+  return (await $.process.run(['git', 'cat-file', '-e', `${pr.head}^{commit}`], { cwd })).exitCode === 0 ? 'rewritten' : undefined
+}
+
+function pushText(s: StackSnapshot, branches: string[]) {
+  const names = branches.map(b => `\`${b}\``).join(', ')
+  const how =
+    s.source === 'gh-stack'
+      ? 'with `gh stack push`'
+      : s.untracked
+        ? 'with `git push --force-with-lease`'
+        : 'with Graphite (`gt submit --update-only --no-edit`), and switch back to the branch I was on afterwards'
+  return `Push the local commits on ${names} to their open PRs ${how}. Don't open new PRs and don't change any code.`
+}
+
+function commitText(s: StackSnapshot, branch: string) {
+  const restack =
+    s.source === 'gh-stack'
+      ? ', then run `gh stack rebase` so the branches above stay stacked'
+      : s.untracked
+        ? ''
+        : '; use `gt modify` so the branches above get restacked'
+  return (
+    `Commit my uncommitted changes on \`${branch}\`. Follow this repo's commit conventions, ` +
+    `including whether to amend the existing commit or add a new one${restack}. Don't push and don't change any code.`
+  )
 }
 
 async function gtVersion($: Engine, cwd: string) {
@@ -416,6 +452,7 @@ function toPrInfo(pr: GqlPr): PrInfo {
     url: pr.url,
     state: pr.state,
     isDraft: pr.isDraft,
+    head: pr.headRefOid,
     reviewDecision: pr.reviewDecision ?? '',
     labels: pr.labels.nodes.map(l => ({ name: l.name, color: l.color, description: l.description ?? undefined })),
     ci,
@@ -792,9 +829,9 @@ async function stackAction($: Engine, branch?: string) {
   const handOff = (reason: string) =>
     void $.prompt.submit({
       text: isGh
-        ? `${reason} Bring my GitHub stack up to date with origin/main: run \`gh stack rebase\`, resolving any conflicts ` +
-          '(`gh stack rebase --continue` after each). Don\'t use `gh stack sync`, it pushes. ' +
-          "Switch back to the branch I was on afterwards, don't push anything, and tell me what changed."
+        ? `${reason} Bring my GitHub stack up to date with origin/main and push it: run \`gh stack sync\`. ` +
+          'If it stops on a conflict, run `gh stack rebase`, resolve the conflicts (`gh stack rebase --continue` after each), then `gh stack push`. ' +
+          'Switch back to the branch I was on afterwards and tell me what changed.'
         : `${reason} Bring my Graphite stack up to date with origin/main: run \`gt sync\` (accept updating trunk and ` +
           'deleting merged branches), then `gt restack`, resolving any conflicts (`gt continue` after each). ' +
           "Switch back to the branch I was on afterwards, don't push anything, and tell me what changed.",
@@ -807,7 +844,7 @@ async function stackAction($: Engine, branch?: string) {
     if (dirty) return handOff('The working tree has uncommitted changes, so the graphite-stack plugin did not sync on its own.')
 
     const steps = isGh
-      ? [['gh', 'stack', 'rebase']]
+      ? [['gh', 'stack', 'sync']]
       : [
           ['gt', 'sync', '--force', '--no-interactive'],
           ['gt', 'restack', '--no-interactive', ...(branch ? ['--branch', branch] : [])],
@@ -821,10 +858,12 @@ async function stackAction($: Engine, branch?: string) {
       return void $.prompt.submit({
         text:
           `\`${argv.join(' ')}\` ${rebasing ? 'stopped on a conflict' : 'failed'}:\n\n\`\`\`\n${output}\n\`\`\`\n\n` +
-          (rebasing
+          (isGh
+            ? 'Run `gh stack rebase`, resolve any conflicts (`gh stack rebase --continue` after each), then `gh stack push`. '
+            : rebasing
             ? `Resolve the conflicts and run \`${isGh ? 'gh stack rebase --continue' : 'gt continue'}\` until the restack finishes. `
             : `Find out what went wrong and finish syncing and restacking my ${isGh ? 'GitHub' : 'Graphite'} stack. `) +
-          `Switch back to ${original ? `\`${original}\`` : 'the branch I was on'} afterwards and don't push anything.`,
+          `Switch back to ${original ? `\`${original}\`` : 'the branch I was on'} afterwards${isGh ? '' : " and don't push anything"}.`,
         asUser: true,
       })
     }
@@ -837,7 +876,7 @@ async function stackAction($: Engine, branch?: string) {
     else handOff(`The graphite-stack plugin failed to sync (${String(error)}).`)
   } finally {
     await update($, working, () => null)
-    void refresh($, 'local')
+    void refresh($, isGh ? 'github' : 'local')
   }
 }
 
@@ -931,6 +970,8 @@ async function pushReview($: Engine) {
       uncommittedOnly: row.uncommittedOnly,
       isCurrent: row.isCurrent,
       needsRestack: row.needsRestack,
+      push: row.push,
+      dirty: row.dirty,
       diff: row.diff,
       lane: laneSvg(row.lane, s.columns, row.branch, row.pr ? prDot(row.pr) : undefined, owner => behind.has(owner), row.isCurrent).source,
       pr: row.pr && {
@@ -984,7 +1025,8 @@ type ReviewersLoadAction = { type: 'reviewers-load'; number: number; query?: str
 type ReviewersSetAction = { type: 'reviewers-set'; number: number; add: string[]; remove: string[] }
 type SubmitBranchAction = { type: 'submit-branch'; branch: string }
 type ThreadResolveAction = { type: 'thread-resolve'; threadId: string; resolve: boolean; branch?: string }
-type PageAction = ReviewAction | PrReadyAction | ReviewersLoadAction | ReviewersSetAction | SubmitBranchAction | ThreadResolveAction
+type BranchPromptAction = { type: 'push-branch' | 'commit-branch'; branch: string }
+type PageAction = ReviewAction | PrReadyAction | ReviewersLoadAction | ReviewersSetAction | SubmitBranchAction | BranchPromptAction | ThreadResolveAction
 type ActionResult = { ok: boolean; message?: string; data?: unknown }
 
 const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/
@@ -1381,6 +1423,15 @@ async function pollReviewActions($: Engine, port: number) {
           results[action.id] = { ok: true, data: { queued: turnRunning } }
         }
       }
+      if (!handled.has(action.id) && (action.type === 'push-branch' || action.type === 'commit-branch')) {
+        const current = await read($, snapshot)
+        const row = current.rows.find(r => r.branch === action.branch && (action.type === 'push-branch' ? r.push : r.dirty))
+        if (!row) results[action.id] = { ok: false, message: 'Nothing to do on that branch.' }
+        else {
+          await queuePrompt($, action.type === 'push-branch' ? pushText(current, [row.branch]) : commitText(current, row.branch))
+          results[action.id] = { ok: true, data: { queued: turnRunning } }
+        }
+      }
       if (!handled.has(action.id) && action.type === 'reviewers-set' && Number.isInteger(action.number)) {
         results[action.id] = await setReviewers($, action).catch(error => ({ ok: false, message: String(error) }))
       }
@@ -1561,7 +1612,7 @@ async function refresh($: Engine, mode: Mode) {
     if (prs && [...prs].some(([branch, pr]) => JSON.stringify(pr) !== JSON.stringify(previous.get(branch)))) {
       lastChangeAt = Date.now()
     }
-    const rows = await Promise.all(
+    const shaped = await Promise.all(
       built.rows.map(async row => {
         if (row.isTrunk) return row
         const parent = row.parent
@@ -1582,6 +1633,14 @@ async function refresh($: Engine, mode: Mode) {
         ])
         return { ...row, pr, diff, needsRestack: !isAncestor }
       }),
+    )
+    const dirty = !!(await run($, cwd, ['git', 'status', '--porcelain']))
+    const rows = await Promise.all(
+      shaped.map(async row =>
+        row.isTrunk || row.uncommittedOnly
+          ? row
+          : { ...row, push: await pushState($, cwd, row.branch, row.pr), dirty: (row.isCurrent && dirty) || undefined },
+      ),
     )
 
     await update($, snapshot, s => ({
@@ -1972,7 +2031,7 @@ export const register: Register = (on, options) => {
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const ran = await next(e)
     if (GITHUB_COMMAND.test(e.command)) requestRefresh($, 'github')
-    else if (/\b(gt|git)\s/.test(e.command)) requestRefresh($, 'local')
+    else if (/\b(gt|git|gh\s+stack)\s/.test(e.command)) requestRefresh($, 'local')
 
     return ran
   })
@@ -1994,6 +2053,7 @@ export const register: Register = (on, options) => {
 
     const busy = await read($, working)
     const behind = new Set(s.rows.filter(row => row.needsRestack).map(row => row.branch))
+    const unpushed = s.rows.filter(row => row.push).map(row => row.branch)
     const prs = s.rows.filter(row => row.pr)
     const failing = prs.filter(row => row.pr?.ci === 'fail').length
     const texts = s.rows.flatMap(row => (row.diff ? [diffText(row.diff)] : []))
@@ -2033,6 +2093,9 @@ export const register: Register = (on, options) => {
           <Text dimColor>{summary}</Text>
           <Box flexGrow={1} />
           <Button key="review" plain dimColor label="Review stack" onPress={() => void openReview($, s.branch)} />
+          {unpushed.length > 1 && (
+            <Button key="push-all" plain dimColor label={`Push ↑${unpushed.length}`} onPress={() => void $.prompt.submit({ text: pushText(s, unpushed), asUser: true })} />
+          )}
           {!s.untracked && (
             <Button
               key="sync"
@@ -2079,6 +2142,7 @@ export const register: Register = (on, options) => {
           return (
             <Box flexDirection="row" alignItems="center" gap={1}>
               <Svg source={lane.source} alt={row.parent ? `${row.branch} on ${row.parent}` : row.branch} width={lane.width} height={ROW} />
+              {prs.length > 0 && (
               <Box flexDirection="row" flexShrink={0}>
                 <Box key={`meta-${row.branch}`} flexShrink={0}>
                   <Svg source={meta.left.source} alt={meta.left.alt} width={meta.left.width} height={ROW} />
@@ -2119,15 +2183,14 @@ export const register: Register = (on, options) => {
                   )}
                 </Box>
               </Box>
+              )}
               <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
                 {pr ? (
                   <Button key={`open-${row.branch}`} plain label={pr.title} onPress={() => void openReview($, row.branch)} />
                 ) : row.uncommittedOnly ? (
                   <Button key={`open-${row.branch}`} plain dimColor label={`uncommitted changes on ${row.branch}`} onPress={() => void openReview($, row.branch)} />
-                ) : !row.isTrunk ? (
-                  <Button key={`open-${row.branch}`} plain dimColor label={row.branch} onPress={() => void openReview($, row.branch)} />
                 ) : (
-                  <Text dimColor italic={!row.isTrunk} wrap="truncate-end">{row.branch}</Text>
+                  <Button key={`open-${row.branch}`} plain dimColor label={row.branch} onPress={() => void openReview($, row.isTrunk ? s.branch : row.branch)} />
                 )}
               </Box>
               {s.untracked && !row.isTrunk && !row.uncommittedOnly && (
@@ -2135,13 +2198,28 @@ export const register: Register = (on, options) => {
                   <Text dimColor>not tracked by Graphite</Text>
                 </Box>
               )}
-              {row.needsRestack && (
+              {row.needsRestack && s.source !== 'gh-stack' && (
                 <Box flexShrink={0}>
                   <Button
                     key={`restack-${row.branch}`}
                     plain
                     label={busy === `Restacking ${row.branch}…` ? '↻ restacking…' : '↻ restack'}
                     onPress={() => void stackAction($, row.branch)}
+                  />
+                </Box>
+              )}
+              {row.dirty && (
+                <Box flexShrink={0}>
+                  <Button key={`commit-${row.branch}`} plain label="+ commit" onPress={() => void $.prompt.submit({ text: commitText(s, row.branch), asUser: true })} />
+                </Box>
+              )}
+              {row.push && (
+                <Box flexShrink={0}>
+                  <Button
+                    key={`push-${row.branch}`}
+                    plain
+                    label={row.push === 'ahead' ? '↑ push' : '⇅ force push'}
+                    onPress={() => void $.prompt.submit({ text: pushText(s, [row.branch]), asUser: true })}
                   />
                 </Box>
               )}

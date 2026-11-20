@@ -905,6 +905,8 @@ function fileCard(file) {
   </section>`
 }
 
+const PUSH_TIP = { ahead: 'Local commits not on GitHub yet', rewritten: 'Rebased locally, needs a force push' }
+
 function renderStack() {
   $('#stack-kind').textContent = state.source === 'gh-stack' ? 'GitHub stack' : state.untracked ? 'Branches' : 'Graphite stack'
   $('#stack').innerHTML = state.rows
@@ -919,6 +921,8 @@ function renderStack() {
       const classes = ['row', row.isTrunk ? 'trunk' : '', row.branch === selected ? 'selected' : ''].join(' ')
       return `<div class="${classes}" data-branch="${esc(row.branch)}" title="${esc(row.branch)}">${row.lane}${title}${
         row.needsRestack ? '<span class="restack" title="Needs a restack">↻</span>' : ''
+      }${row.dirty ? '<span class="restack" title="Uncommitted changes">●</span>' : ''}${
+        row.push ? `<span class="restack" title="${PUSH_TIP[row.push]}">${row.push === 'ahead' ? '↑' : '⇅'}</span>` : ''
       }${stat}</div>`
     })
     .join('')
@@ -1198,6 +1202,8 @@ function renderHeader() {
       <span>${files.length} file${files.length === 1 ? '' : 's'}</span>
       <span class="stat"><span class="add">+${totals.added}</span> <span class="del">−${totals.removed}</span></span>
       ${row.needsRestack ? '<span class="badge pending">Needs restack</span>' : ''}
+      ${row.push ? `<span class="badge pending" title="${PUSH_TIP[row.push]}">Not pushed</span><button class="btn small" data-act="push-branch">${row.push === 'ahead' ? 'Push' : 'Force push'}</button>` : ''}
+      ${row.dirty ? '<button class="btn small" data-act="commit-branch">Commit changes</button>' : ''}
       ${state.untracked ? '<span class="untracked-note">Not tracked by Graphite yet</span>' : ''}
       ${current?.mode === 'all' ? '<span class="badge pending">Includes uncommitted changes</span>' : ''}
       ${current?.mode === 'uncommitted' ? '<span class="badge pending">Uncommitted changes only</span>' : ''}
@@ -1676,19 +1682,20 @@ async function waitForDelivery(id, seconds = 60) {
 
 const submitLabel = () => (state.untracked ? 'Open draft PR' : 'Submit as draft PR')
 
-async function submitBranch(button) {
+async function askClaude(button, type) {
+  const label = button.textContent
   button.disabled = true
   button.textContent = 'Asking Claude…'
-  const result = await runAction({ type: 'submit-branch', branch: selected }).catch(() => null)
+  const result = await runAction({ type, branch: selected }).catch(() => null)
   button.textContent = !result?.ok
-    ? 'Claude Code did not answer'
+    ? (result?.message ?? 'Claude Code did not answer')
     : result.data?.queued
       ? 'Queued for Claude ✓'
-      : 'Claude is submitting it ✓'
+      : 'Sent to Claude ✓'
   setTimeout(() => {
     if (!button.isConnected) return
     button.disabled = false
-    button.textContent = submitLabel()
+    button.textContent = label
   }, 5000)
 }
 
@@ -2137,7 +2144,7 @@ document.addEventListener('click', event => {
     renderAll()
   }
   if (d.act === 'pr-ready') setReady(el)
-  if (d.act === 'submit-branch') submitBranch(el)
+  if (d.act === 'submit-branch' || d.act === 'push-branch' || d.act === 'commit-branch') askClaude(el, d.act)
   if (d.act === 'reviewers') {
     if (picker) closePicker()
     else openPicker(el)
