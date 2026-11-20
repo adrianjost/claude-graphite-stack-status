@@ -20,6 +20,10 @@ const waitingPrompts = atom({ plugin: 'graphite-stack', key: 'waitingPrompts' } 
 const reviewReplies = atom({ plugin: 'graphite-stack', key: 'reviewReplies' } as const, {} as Record<string, ReviewReply>)
 const sessionStart = atom({ plugin: 'graphite-stack', key: 'sessionStart' } as const, null as number | null)
 const updateInfo = atom({ plugin: 'graphite-stack', key: 'updateInfo' } as const, null as UpdateInfo | null)
+const excludeTests = atom({ plugin: 'graphite-stack', key: 'excludeTests' } as const, false)
+const TEST_FILE = /(^|\/)(__tests__|__mocks__|tests?|specs?|e2e)\/|\.(test|spec|e2e)\.[^/]+$|_test\.[^/]+$|(^|\/)test_[^/]+\.py$/
+let skipTests = false
+const counts = (path: string) => !skipTests || !TEST_FILE.test(path.replace(/\{[^}]*=> ([^}]*)\}/, '$1').replace(/^.* => /, ''))
 const REPLY_TOOL = 'mcp__graphite-stack__review_reply'
 const REPLY_LINE = `When done, call ${REPLY_TOOL} once: refs you addressed in \`fixed\`; a one-sentence reply only for questions or anything you didn't do.`
 const MAX_REPLIES = 200
@@ -197,7 +201,8 @@ function sumStat(out: string, extra = 0) {
   let added = extra
   let removed = 0
   for (const line of out.split('\n')) {
-    const [a, r] = line.split('\t')
+    const [a, r, path = ''] = line.split('\t')
+    if (!counts(path)) continue
     added += Number(a) || 0
     removed += Number(r) || 0
   }
@@ -216,7 +221,10 @@ async function worktreeStat($: Engine, cwd: string, base: string) {
   ])
   const files = (listed ?? '').split('\0').filter(Boolean).slice(0, 200)
   const counted = files.length ? await exec($, cwd, ['git', 'grep', '--no-index', '-I', '-c', '-e', '', '--', ...files]) : undefined
-  const lines = (counted?.stdout ?? '').split('\n').reduce((sum, line) => sum + (Number(line.slice(line.lastIndexOf(':') + 1)) || 0), 0)
+  const lines = (counted?.stdout ?? '')
+    .split('\n')
+    .filter(line => counts(line.slice(0, line.lastIndexOf(':'))))
+    .reduce((sum, line) => sum + (Number(line.slice(line.lastIndexOf(':') + 1)) || 0), 0)
   return sumStat(tracked ?? '', lines)
 }
 
@@ -1346,10 +1354,8 @@ async function pollReviewActions($: Engine, port: number) {
 }
 
 const RELEASES = 'https://api.github.com/repos/adrianjost/claude-graphite-stack-status/releases/latest'
-const UPDATE_COMMANDS = [
-  ['claude', 'plugin', 'marketplace', 'update', 'adrianjost'],
-  ['claude', 'plugin', 'update', 'graphite-stack@adrianjost'],
-]
+const UPDATE_SCRIPT =
+  'c="${CLAUDE_CODE_EXECPATH:-claude}"; "$c" plugin marketplace update adrianjost && "$c" plugin update graphite-stack@adrianjost'
 const UPDATE_CHECK_MS = 6 * 60 * 60_000
 let updateTimer: Timer | undefined
 
@@ -1400,12 +1406,10 @@ async function installUpdate($: Engine) {
   await update($, updateInfo, i => i && { ...i, state: 'updating' as const })
   const cwd = await $.session.cwd()
   let ok = true
-  for (const argv of UPDATE_COMMANDS) {
-    const result = await $.process.run(argv, { cwd, timeoutMs: 180_000 }).catch(() => undefined)
-    if (result?.exitCode !== 0) {
-      ok = false
-      break
-    }
+  const result = await $.process.run(['sh', '-c', UPDATE_SCRIPT], { cwd, timeoutMs: 180_000 }).catch(() => undefined)
+  if (result?.exitCode !== 0) {
+    ok = false
+    $.ui.log(`plugin update failed: ${(result?.stderr || result?.stdout || 'no result').trim()}`, { to: 'debug' })
   }
   if (ok) {
     await update($, updateInfo, i => i && { ...i, state: 'installed' as const })
@@ -1413,7 +1417,7 @@ async function installUpdate($: Engine) {
     return
   }
   await update($, updateInfo, i => i && { ...i, state: 'available' as const })
-  await queuePrompt($, `Update the graphite-stack plugin to ${info.version}: run \`${UPDATE_COMMANDS.map(c => c.join(' ')).join(' && ')}\` and tell me to restart Claude Code afterwards. Don't change anything else.`)
+  await queuePrompt($, `Update the graphite-stack plugin to ${info.version}: run \`${UPDATE_SCRIPT}\` (\`$CLAUDE_CODE_EXECPATH\` is the Claude Code binary of this app, for when \`claude\` isn't on the PATH) and tell me to restart Claude Code afterwards. Don't change anything else.`)
 }
 
 async function dismissUpdate($: Engine) {
@@ -1816,6 +1820,8 @@ export const register: Register = on => {
     const started = await next(e)
     await update($, sessionStart, at => at ?? Date.now())
     void checkUpdate($)
+    skipTests = (await $.store.get('excludeTests')) === true
+    await update($, excludeTests, () => skipTests)
     await $.command.register({
       name: 'stack',
       description: 'Show or hide the Graphite stack above the prompt',
@@ -1958,6 +1964,18 @@ export const register: Register = on => {
           <Text bold>Graphite stack</Text>
           <Text dimColor>{summary}</Text>
           <Box flexGrow={1} />
+          <Button
+            key="tests"
+            plain
+            dimColor
+            label={(await read($, excludeTests)) ? 'Line counts: without tests' : 'Line counts: with tests'}
+            onPress={() => {
+              skipTests = !skipTests
+              void update($, excludeTests, () => skipTests)
+              void $.store.set('excludeTests', skipTests)
+              requestRefresh($, 'local')
+            }}
+          />
           <Button key="review" plain dimColor label="Review stack" onPress={() => void openReview($, s.branch)} />
           {!s.untracked && (
             <Button
