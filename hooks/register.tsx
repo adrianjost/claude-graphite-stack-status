@@ -2269,7 +2269,7 @@ export const register: Register = (on, options) => {
                 )
               })()}
               {prs.length > 0 && (prefs.showGraphite || prefs.showGithub) && (
-                <Box key={`links-${row.branch}`} flexDirection="row" alignItems="center" gap={1} flexShrink={0} width={6}>
+                <Box key={`links-${row.branch}`} flexDirection="row" alignItems="center" gap={1} flexShrink={0} width={prefs.showGraphite && prefs.showGithub ? 6 : 3}>
                   {pr && prefs.showGraphite && <Link key={`gt-${row.branch}`} href={graphiteUrl(pr)} label="📚" />}
                   {pr && prefs.showGithub && <Link key={`gh-${row.branch}`} href={pr.url} label="🐙" />}
                 </Box>
