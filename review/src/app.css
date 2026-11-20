@@ -204,6 +204,10 @@ a:hover {
   color: var(--muted);
 }
 
+.stack-source {
+  font-weight: 400;
+}
+
 .connection {
   width: 8px;
   height: 8px;
@@ -433,6 +437,7 @@ main {
 }
 
 .file {
+  position: relative;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg);
@@ -1578,6 +1583,22 @@ td.ln[data-line]:has(+ td.code:hover) {
 .file-comments .comment,
 .file-comments .composer {
   max-width: none;
+}
+
+.file-composer {
+  position: absolute;
+  top: 52px;
+  right: 8px;
+  z-index: 4;
+  width: min(560px, calc(100% - 16px));
+}
+
+.file:has(> .file-composer) {
+  z-index: 6;
+}
+
+.file-composer .composer {
+  box-shadow: 0 0 0 3px var(--accent-muted), 0 8px 24px rgb(0 0 0 / 0.3);
 }
 
 .delete-item {

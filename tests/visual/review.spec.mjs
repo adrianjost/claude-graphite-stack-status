@@ -73,13 +73,13 @@ test.describe('looks', () => {
 
   test('a GitHub stack', async ({ page }) => {
     await open(page, { state: 'gh-stack' })
-    await expect(page.locator('#stack-kind')).toHaveText('Code changes')
+    await expect(page.locator('#stack-source')).toHaveText('· GitHub stack')
     await expect(page.locator('#sidebar')).toHaveScreenshot('gh-stack-sidebar.png')
   })
 
   test('a plain git branch', async ({ page }) => {
     await open(page, { state: 'untracked', repo: 'plain', branch: 'adrian/quick-fix' })
-    await expect(page.locator('#stack-kind')).toHaveText('Code changes')
+    await expect(page.locator('#stack-source')).toHaveText('')
     await shot(page, 'plain-branch')
   })
 
@@ -104,16 +104,21 @@ test.describe('looks', () => {
 test.describe('stack list', () => {
   test('shows the stack top to bottom with its kind, and switches branches', async ({ page }) => {
     await open(page)
-    await expect(page.locator('#stack-kind')).toHaveText('Code changes')
+    await expect(page.locator('#stack-source')).toHaveText('· Graphite')
     await expect(page.locator('#stack .row .title')).toHaveText([
       'adrian/parents-questions',
       '✨ Gate the parents chapter',
       '✨ Ask the shared story intro',
       'main',
     ])
-    await expect(page.locator('#stack .row', { hasText: 'parents-questions' }).locator('.restack')).toHaveAttribute('title', 'Needs a restack')
+    await expect(page.locator('#stack .row', { hasText: 'parents-questions' }).locator('.restack')).toHaveAttribute('title', "Needs a restack: not based on its parent's latest commit")
     await expect(page.locator('#stack .row', { hasText: 'shared story intro' }).locator('.restack')).toHaveAttribute('title', 'Local commits not on GitHub yet')
-    await expect(page.locator('#stack .row', { hasText: 'Gate the parents' }).locator('.restack')).toHaveAttribute('title', 'Uncommitted changes')
+    await expect(page.locator('#stack .row', { hasText: 'Gate the parents' }).locator('.restack')).toHaveAttribute('title', 'Uncommitted changes in the working tree')
+
+    const tip = text => page.locator('#stack .row', { hasText: text }).locator('svg > title')
+    await expect(tip('parents-questions')).toHaveText("Hollow dot: no PR yet\nDotted line: not based on its parent's latest commit")
+    await expect(tip('Gate the parents')).toHaveText('Green dot: open PR\nRing around the dot: the checked-out branch')
+    await expect(page.locator('#stack .row', { hasText: 'Gate the parents' }).locator('.stat')).toHaveAttribute('title', 'Lines added and removed against the parent branch')
 
     await page.locator('#stack .row', { hasText: 'shared story intro' }).click()
     await expect(page.locator('#header h1')).toContainText('Ask the shared story intro')

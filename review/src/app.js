@@ -774,8 +774,13 @@ function fileComments(path, openOnly = false) {
     if (prefs.showSent || comments.some(c => c.replyTo === chain.at(-1).id) || composers.some(c => c.replyTo === chain.at(-1).id)) html += sentThread(chain)
   }
   const box = composerAt(at)
-  if (box) html += composerBox(box)
+  if (box?.existing) html += composerBox(box)
   return html ? `<div class="file-comments">${html}</div>` : ''
+}
+
+function fileOverlay(path) {
+  const box = composerAt({ path, kind: 'file' })
+  return box && !box.existing ? `<div class="file-composer">${composerBox(box)}</div>` : ''
 }
 
 function fileBody(file) {
@@ -901,26 +906,38 @@ function fileCard(file) {
       <button class="btn icon invisible" data-file-comment="${esc(file.path)}" title="Comment on this file">${ICONS.comment}</button>
       <label class="viewed-toggle"><input type="checkbox" data-viewed="${esc(file.path)}" ${viewed ? 'checked' : ''}>Viewed</label>
     </div>
+    ${closed ? '' : fileOverlay(file.path)}
     <div class="file-body">${closed ? '' : fileBody(file)}</div>
   </section>`
 }
 
 const PUSH_TIP = { ahead: 'Local commits not on GitHub yet', rewritten: 'Rebased locally, needs a force push' }
+const PR_DOT = { OPEN: 'Green dot: open PR', MERGED: 'Purple dot: merged PR', CLOSED: 'Red dot: closed PR' }
+
+function laneTip(row) {
+  const pr = row.pr
+  return [
+    row.isTrunk ? 'Trunk' : pr ? (pr.isDraft ? 'Grey dot: draft PR' : (PR_DOT[pr.state] ?? `PR ${pr.state.toLowerCase()}`)) : 'Hollow dot: no PR yet',
+    row.isCurrent ? 'Ring around the dot: the checked-out branch' : '',
+    row.needsRestack ? "Dotted line: not based on its parent's latest commit" : '',
+  ].filter(Boolean).join('\n')
+}
 
 function renderStack() {
+  $('#stack-source').textContent = state.untracked ? '' : state.source === 'gh-stack' ? '· GitHub stack' : '· Graphite'
   $('#stack').innerHTML = state.rows
     .map(row => {
       const pr = row.pr
       const stat = row.diff
-        ? `<span class="stat"><span class="add">+${row.diff.added}</span> <span class="del">−${row.diff.removed}</span></span>`
+        ? `<span class="stat" title="Lines added and removed against the parent branch"><span class="add">+${row.diff.added}</span> <span class="del">−${row.diff.removed}</span></span>`
         : ''
       const title = pr
         ? `<span class="num">#${pr.number}</span><span class="title">${esc(pr.title)}</span>`
         : `<span class="title ${row.isTrunk ? '' : 'branch'}">${esc(row.branch)}</span>`
       const classes = ['row', row.isTrunk ? 'trunk' : '', row.branch === selected ? 'selected' : ''].join(' ')
-      return `<div class="${classes}" data-branch="${esc(row.branch)}" title="${esc(row.branch)}">${row.lane}${title}${
-        row.needsRestack ? '<span class="restack" title="Needs a restack">↻</span>' : ''
-      }${row.dirty ? '<span class="restack" title="Uncommitted changes">●</span>' : ''}${
+      return `<div class="${classes}" data-branch="${esc(row.branch)}" title="${esc(row.branch)}">${row.lane.replace('>', `><title>${esc(laneTip(row))}</title>`)}${title}${
+        row.needsRestack ? `<span class="restack" title="Needs a restack: not based on its parent's latest commit">↻</span>` : ''
+      }${row.dirty ? '<span class="restack" title="Uncommitted changes in the working tree">●</span>' : ''}${
         row.push ? `<span class="restack" title="${PUSH_TIP[row.push]}">${row.push === 'ahead' ? '↑' : '⇅'}</span>` : ''
       }${stat}</div>`
     })
