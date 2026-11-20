@@ -1074,11 +1074,16 @@ tr.thread > td {
 
 .file.half .file-body {
   display: flex;
+  flex-wrap: wrap;
   background: var(--empty);
 }
 
 .file.half.new-side .file-body {
   justify-content: flex-end;
+}
+
+.file.half .file-body > :not(table) {
+  flex-basis: 100%;
 }
 
 .file.half .file-body > table {

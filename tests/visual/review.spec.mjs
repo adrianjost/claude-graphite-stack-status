@@ -177,6 +177,18 @@ test.describe('reviewing', () => {
     ])
   })
 
+  test('a long file comment on an added file spans the file and leaves the code its half', async ({ page }) => {
+    await open(page)
+    const file = page.locator('#diff section.file.half.new-side').first()
+    await file.locator('[data-file-comment]').click({ force: true })
+    await page.locator('.composer textarea').fill('Why the move to a new file? '.repeat(30))
+    await page.locator('.composer [data-act="save"]').click()
+    const width = sel => file.locator(sel).first().evaluate(el => el.getBoundingClientRect().width)
+    const body = await width('.file-body')
+    expect(await width('.file-comments')).toBe(body)
+    expect(await width('.file-body > table')).toBeCloseTo(body / 2, 0)
+  })
+
   test('GitHub threads show on their lines', async ({ page }) => {
     await open(page)
     const file = page.locator('#diff section.file[data-file="src/feature.ts"]')
