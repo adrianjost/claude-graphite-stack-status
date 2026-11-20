@@ -2092,7 +2092,7 @@ export const register: Register = (on, options) => {
           <Text bold>Code changes</Text>
           <Text dimColor>{summary}</Text>
           <Box flexGrow={1} />
-          <Button key="review" plain dimColor label="Review stack" onPress={() => void openReview($, s.branch)} />
+          <Button key="review" plain dimColor label="Review code" onPress={() => void openReview($, s.branch)} />
           {unpushed.length > 1 && (
             <Button key="push-all" plain dimColor label={`Push ↑${unpushed.length}`} onPress={() => void $.prompt.submit({ text: pushText(s, unpushed), asUser: true })} />
           )}

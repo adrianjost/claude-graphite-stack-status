@@ -95,7 +95,7 @@ describe('band layout', () => {
   test('the header has review, sync, refresh and hide', async ($, on) => {
     const { draw } = await start($, on, STACK)
     const { ui, tree } = await draw()
-    expect(labels(kids0(tree))).toEqual(['Review stack', 'Sync with main', '↻', '✕'])
+    expect(labels(kids0(tree))).toEqual(['Review code', 'Sync with main', '↻', '✕'])
     await ui.unmount()
   })
 })

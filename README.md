@@ -49,7 +49,7 @@ The band appears on its own whenever the session's branch belongs to a Graphite 
 
 ## Review page
 
-**Review stack** in the band's header, or **Review ↗** on a branch's line counts, opens a live review page for the stack in your browser. Each click opens a new tab on that branch, and every open tab follows the session as Claude works.
+**Review code** in the band's header, or **Review ↗** on a branch's line counts, opens a live review page for the stack in your browser. Each click opens a new tab on that branch, and every open tab follows the session as Claude works.
 
 - The stack graph on the left switches between branches (or press `[` and `]`).
 - For a branch with a PR, the top shows its state, with a button to mark a draft **Ready for review** or **Convert to draft** (through `gh pr ready`), assigned reviewers with their review status (**Edit reviewers** opens a GitHub-style picker with suggestions to request or remove reviewers), and its labels, followed by the PR description (capped, with **Show all**). **Comment on description** adds feedback on the description, quoting any text you selected in it; Claude applies it by editing the PR description.
