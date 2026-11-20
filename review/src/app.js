@@ -1173,7 +1173,7 @@ function renderHeader() {
         ${pr.graphiteUrl ? `<a class="btn icon invisible" href="${esc(pr.graphiteUrl)}" target="_blank" rel="noreferrer" title="Open on Graphite">${ICONS.graphite}</a>` : ''}
       </span>`
     : current?.draft?.title && current.branch === row.branch
-      ? `${esc(current.draft.title)} <span class="num">no PR yet</span>`
+      ? esc(current.draft.title)
       : esc(row.branch)
   const base = current?.parent ?? (prefs.compare === 'trunk' ? state.trunk : row.parent)
   const totals = files.reduce((sum, f) => ({ added: sum.added + f.added, removed: sum.removed + f.removed }), { added: 0, removed: 0 })

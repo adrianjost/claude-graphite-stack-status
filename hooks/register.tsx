@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface as Engine, Register, RenderChildren, Timer } from 'claude-code'
+import type { EngineInterface as Engine, Register, Timer } from 'claude-code'
 
 import type { CiState, Issue, Lane, PrInfo, Settings, ReviewReply, StackRow, StackSnapshot, UpdateInfo, WaitingPrompt } from '../types'
 
@@ -21,8 +21,6 @@ const reviewReplies = atom({ plugin: 'graphite-stack', key: 'reviewReplies' } as
 const sessionStart = atom({ plugin: 'graphite-stack', key: 'sessionStart' } as const, null as number | null)
 const updateInfo = atom({ plugin: 'graphite-stack', key: 'updateInfo' } as const, null as UpdateInfo | null)
 const DEFAULT_SETTINGS: Settings = { excludeTests: false, showGraphite: true, showGithub: true, githubHost: 'github.com', graphiteUrl: 'https://app.graphite.com' }
-const settings = atom({ plugin: 'graphite-stack', key: 'settings' } as const, DEFAULT_SETTINGS)
-const settingsOpen = atom({ plugin: 'graphite-stack', key: 'settingsOpen' } as const, false)
 let prefs = DEFAULT_SETTINGS
 const TEST_FILE = /(^|\/)(__tests__|__mocks__|tests?|specs?|e2e)\/|\.(test|spec|e2e)\.[^/]+$|_test\.[^/]+$|(^|\/)test_[^/]+\.py$/
 const counts = (path: string) => !prefs.excludeTests || !TEST_FILE.test(path.replace(/\{[^}]*=> ([^}]*)\}/, '$1').replace(/^.* => /, ''))
@@ -298,6 +296,7 @@ async function sessionPrBranches($: Engine, cwd: string) {
   )
   const key = `heads:${slug}`
   const heads = ((await $.store.get(key)) ?? {}) as Record<string, string>
+  for (const number of Object.keys(heads)) if (!open.some(pr => String(pr.number) === number)) delete heads[number]
   for (const pr of open) if (pr.head) heads[pr.number] = pr.head
   const missing = open.filter(pr => !heads[pr.number])
   if (missing.length) {
@@ -517,10 +516,10 @@ let syncingThreads = false
 let resyncThreads = false
 
 async function threadStore($: Engine) {
-  if (threadCache) return threadCache
   const repo = await githubRepo($, await $.session.cwd())
   if (!repo) return undefined
   const key = `threads:${repo.owner}/${repo.name}`
+  if (threadCache?.key === key) return threadCache
   threadCache = { key, cache: ((await $.store.get(key)) ?? {}) as ThreadCache }
   return threadCache
 }
@@ -785,15 +784,6 @@ async function schedulePoll($: Engine) {
   })
 }
 
-async function saveSettings($: Engine, change: Partial<Settings>) {
-  const before = prefs
-  prefs = { ...prefs, ...change }
-  await update($, settings, () => prefs)
-  await $.store.set('settings', prefs)
-  if (before.excludeTests !== prefs.excludeTests) requestRefresh($, 'local')
-  if (before.githubHost !== prefs.githubHost) requestRefresh($, 'force')
-}
-
 async function stackAction($: Engine, branch?: string) {
   if (await read($, working)) return
   const label = branch ? `Restacking ${branch}…` : 'Syncing with main…'
@@ -1035,6 +1025,16 @@ async function loadReviewers($: Engine, number: number, query = ''): Promise<Act
   }
 }
 
+async function patchPr($: Engine, cwd: string, patch: <T extends PrInfo | null | undefined>(pr: T) => T) {
+  await update($, snapshot, s => ({ ...s, rows: s.rows.map(row => (row.pr ? { ...row, pr: patch(row.pr) } : row)) }))
+  const repo = await githubRepo($, cwd)
+  const shared = repo ? ((await $.store.get(`prs:${repo.owner}/${repo.name}`)) as SharedCache | undefined) : undefined
+  if (repo && shared) {
+    for (const cached of Object.values(shared)) cached.pr = patch(cached.pr)
+    await $.store.set(`prs:${repo.owner}/${repo.name}`, shared)
+  }
+}
+
 async function setReviewers($: Engine, action: ReviewersSetAction): Promise<ActionResult> {
   const add = (action.add ?? []).filter(login => LOGIN.test(login)).slice(0, 15)
   const remove = (action.remove ?? []).filter(login => LOGIN.test(login))
@@ -1055,13 +1055,7 @@ async function setReviewers($: Engine, action: ReviewersSetAction): Promise<Acti
     const reviewers = [...kept, ...add.filter(name => !kept.some(r => r.name === name)).map(name => ({ name, state: 'REQUESTED' }))]
     return { ...pr, reviewers, hasReviewers: reviewers.length > 0 }
   }
-  await update($, snapshot, s => ({ ...s, rows: s.rows.map(row => (row.pr ? { ...row, pr: patch(row.pr) } : row)) }))
-  const repo = await githubRepo($, cwd)
-  const shared = repo ? ((await $.store.get(`prs:${repo.owner}/${repo.name}`)) as SharedCache | undefined) : undefined
-  if (repo && shared) {
-    for (const cached of Object.values(shared)) cached.pr = patch(cached.pr)
-    await $.store.set(`prs:${repo.owner}/${repo.name}`, shared)
-  }
+  await patchPr($, cwd, patch)
   schedulePushReview($)
   requestRefresh($, 'force')
   return { ok: true }
@@ -1083,13 +1077,7 @@ async function setThreadResolved($: Engine, action: ThreadResolveAction): Promis
   const number = Number(entry[0])
   const openThreads = entry[1].threads.filter(t => !t.resolved).length
   const patch = <T extends PrInfo | null | undefined>(pr: T): T => (pr?.number === number ? { ...pr, openThreads, threadFp: entry[1].fp } : pr)
-  await update($, snapshot, s => ({ ...s, rows: s.rows.map(row => (row.pr ? { ...row, pr: patch(row.pr) } : row)) }))
-  const repo = await githubRepo($, cwd)
-  const shared = repo ? ((await $.store.get(`prs:${repo.owner}/${repo.name}`)) as SharedCache | undefined) : undefined
-  if (repo && shared) {
-    for (const cached of Object.values(shared)) cached.pr = patch(cached.pr)
-    await $.store.set(`prs:${repo.owner}/${repo.name}`, shared)
-  }
+  await patchPr($, cwd, patch)
   await saveThreads($, store)
   schedulePushReview($)
   return { ok: true }
@@ -1885,15 +1873,23 @@ const fixPrompt = (issue: Issue) =>
   `"${issue.message}"${issue.detail ? ` (details: ${issue.detail})` : ''}. ` +
   'Investigate the cause on this machine, search the web if that helps, and suggest a fix.'
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  const text = (value: unknown) => (typeof value === 'string' ? value.trim() : '')
+  const host = text(options.githubHost).replace(/^https?:\/\//, '').replace(/\/+$/, '')
+  const graphite = text(options.graphiteUrl).replace(/\/+$/, '')
+  prefs = {
+    excludeTests: options.excludeTests === true,
+    showGraphite: options.showGraphite !== false,
+    showGithub: options.showGithub !== false,
+    githubHost: host || DEFAULT_SETTINGS.githubHost,
+    graphiteUrl: /^https?:\/\/\S+$/.test(graphite) ? graphite : DEFAULT_SETTINGS.graphiteUrl,
+  }
+
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     await update($, sessionStart, at => at ?? Date.now())
     void checkUpdate($)
-    const saved = (await $.store.get('settings')) as Partial<Settings> | undefined
-    prefs = { ...DEFAULT_SETTINGS, ...(await $.store.get('excludeTests')) === true ? { excludeTests: true } : {}, ...saved }
-    await update($, settings, () => prefs)
     await $.command.register({
       name: 'stack',
       description: 'Show or hide the Graphite stack above the prompt',
@@ -1975,7 +1971,7 @@ export const register: Register = on => {
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const ran = await next(e)
-    if (GITHUB_COMMAND.test(e.command)) requestRefresh($, 'force')
+    if (GITHUB_COMMAND.test(e.command)) requestRefresh($, 'github')
     else if (/\b(gt|git)\s/.test(e.command)) requestRefresh($, 'local')
 
     return ran
@@ -1994,55 +1990,7 @@ export const register: Register = on => {
     if (e.surface !== 'desktop') return next(e)
     const elements = $.ui.resolve(e)
     if (!('Svg' in elements)) return next(e)
-    const { Box, Text, Button, Link, Svg, Select, Input } = elements
-    if (await read($, settingsOpen)) {
-      await read($, settings)
-      const current = prefs
-      const field = (key: string, label: string, control: RenderChildren) => (
-        <Box key={`row-${key}`} flexDirection="row" alignItems="center" gap={1}>
-          <Box width={18} flexShrink={0}><Text dimColor>{label}</Text></Box>
-          {control}
-        </Box>
-      )
-      const toggle = (key: 'excludeTests' | 'showGraphite' | 'showGithub', label: string, onLabel: string, offLabel: string, value: boolean) =>
-        field(key, label,
-          <Select
-            key={`set-${key}`}
-            value={value ? 'on' : 'off'}
-            options={[{ value: 'on', label: onLabel }, { value: 'off', label: offLabel }]}
-            onSelect={choice => void saveSettings($, { [key]: choice === 'on' })}
-          />,
-        )
-      return (
-        <Box flexDirection="column" gap={1}>
-          <Box flexDirection="row" alignItems="center" gap={1}>
-            <Text bold>Stack settings</Text>
-            <Box flexGrow={1} />
-            <Button key="settings-done" plain label="Done" onPress={() => void update($, settingsOpen, () => false)} />
-          </Box>
-          {toggle('excludeTests', 'Line counts', 'Without test files', 'With test files', current.excludeTests)}
-          {toggle('showGraphite', '📚 Graphite links', 'Shown', 'Hidden', current.showGraphite)}
-          {toggle('showGithub', '🐙 GitHub links', 'Shown', 'Hidden', current.showGithub)}
-          {field('github-host', 'GitHub host', <Input
-            key="set-github-host"
-            placeholder="github.com, or your GitHub Enterprise host"
-            value={current.githubHost}
-            submitLabel="Save"
-            onSubmit={value => void saveSettings($, { githubHost: value.trim().replace(/^https?:\/\//, '').replace(/\/+$/, '') || DEFAULT_SETTINGS.githubHost })}
-          />)}
-          {field('graphite-url', 'Graphite URL', <Input
-            key="set-graphite-url"
-            placeholder={DEFAULT_SETTINGS.graphiteUrl}
-            value={current.graphiteUrl}
-            submitLabel="Save"
-            onSubmit={value => {
-              const url = value.trim().replace(/\/+$/, '')
-              void saveSettings($, { graphiteUrl: /^https?:\/\/\S+$/.test(url) ? url : DEFAULT_SETTINGS.graphiteUrl })
-            }}
-          />)}
-        </Box>
-      )
-    }
+    const { Box, Text, Button, Link, Svg } = elements
 
     const busy = await read($, working)
     const behind = new Set(s.rows.filter(row => row.needsRestack).map(row => row.branch))
@@ -2094,7 +2042,6 @@ export const register: Register = on => {
               onPress={() => void stackAction($)}
             />
           )}
-          <Button key="settings" plain dimColor label="⚙" onPress={() => void update($, settingsOpen, () => true)} />
           <Button key="refresh" plain dimColor label="↻" onPress={() => void refresh($, 'force')} />
           <Button key="hide" plain dimColor label="✕" onPress={() => void update($, isHidden, () => true)} />
         </Box>

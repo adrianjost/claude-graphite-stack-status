@@ -76,11 +76,15 @@ function publish(next) {
 
 function waitFor(list, ms) {
   return new Promise(resolve => {
-    const timer = setTimeout(resolve, ms)
-    list.push(() => {
+    const wake = () => {
       clearTimeout(timer)
       resolve()
-    })
+    }
+    const timer = setTimeout(() => {
+      list.splice(list.indexOf(wake) >>> 0, 1)
+      resolve()
+    }, ms)
+    list.push(wake)
   })
 }
 
