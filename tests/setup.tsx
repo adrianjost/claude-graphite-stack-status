@@ -76,6 +76,6 @@ export const clone = (world: World): World => JSON.parse(JSON.stringify(world)) 
 
 
 export function kids0(tree: Node): Node {
-  // the header row: the first row Box that holds the stack's name
-  return all(tree, n => n.type === 'Box' && (n.children ?? []).some(c => typeof c === 'object' && c.type === 'Text' && /stack$/.test(text(c))))[0]!
+  // the header row: the first row Box that holds the band title
+  return all(tree, n => n.type === 'Box' && (n.children ?? []).some(c => typeof c === 'object' && c.type === 'Text' && text(c) === 'Code changes'))[0]!
 }

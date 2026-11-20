@@ -73,13 +73,13 @@ test.describe('looks', () => {
 
   test('a GitHub stack', async ({ page }) => {
     await open(page, { state: 'gh-stack' })
-    await expect(page.locator('#stack-kind')).toHaveText('GitHub stack')
+    await expect(page.locator('#stack-kind')).toHaveText('Code changes')
     await expect(page.locator('#sidebar')).toHaveScreenshot('gh-stack-sidebar.png')
   })
 
   test('a plain git branch', async ({ page }) => {
     await open(page, { state: 'untracked', repo: 'plain', branch: 'adrian/quick-fix' })
-    await expect(page.locator('#stack-kind')).toHaveText('Branches')
+    await expect(page.locator('#stack-kind')).toHaveText('Code changes')
     await shot(page, 'plain-branch')
   })
 
@@ -104,7 +104,7 @@ test.describe('looks', () => {
 test.describe('stack list', () => {
   test('shows the stack top to bottom with its kind, and switches branches', async ({ page }) => {
     await open(page)
-    await expect(page.locator('#stack-kind')).toHaveText('Graphite stack')
+    await expect(page.locator('#stack-kind')).toHaveText('Code changes')
     await expect(page.locator('#stack .row .title')).toHaveText([
       'adrian/parents-questions',
       '✨ Gate the parents chapter',

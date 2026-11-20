@@ -19,6 +19,7 @@ function boxStyle(p) {
   if (p.width !== undefined) s.push(`width:${px(p.width)}`)
   if (p.overflow) s.push(`overflow:${p.overflow}`)
   if (p.marginBottom !== undefined) s.push(`margin-bottom:${px(p.marginBottom)}`)
+  if (p.marginLeft !== undefined) s.push(`margin-left:${px(p.marginLeft)}`)
   if (p.paddingX !== undefined) s.push(`padding-left:${px(p.paddingX)};padding-right:${px(p.paddingX)}`)
   if (p.position === 'absolute') s.push('position:absolute')
   return s.join(';')

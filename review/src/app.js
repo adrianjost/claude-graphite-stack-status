@@ -908,7 +908,6 @@ function fileCard(file) {
 const PUSH_TIP = { ahead: 'Local commits not on GitHub yet', rewritten: 'Rebased locally, needs a force push' }
 
 function renderStack() {
-  $('#stack-kind').textContent = state.source === 'gh-stack' ? 'GitHub stack' : state.untracked ? 'Branches' : 'Graphite stack'
   $('#stack').innerHTML = state.rows
     .map(row => {
       const pr = row.pr
@@ -1204,7 +1203,6 @@ function renderHeader() {
       ${row.needsRestack ? '<span class="badge pending">Needs restack</span>' : ''}
       ${row.push ? `<span class="badge pending" title="${PUSH_TIP[row.push]}">Not pushed</span><button class="btn small" data-act="push-branch">${row.push === 'ahead' ? 'Push' : 'Force push'}</button>` : ''}
       ${row.dirty ? '<button class="btn small" data-act="commit-branch">Commit changes</button>' : ''}
-      ${state.untracked ? '<span class="untracked-note">Not tracked by Graphite yet</span>' : ''}
       ${current?.mode === 'all' ? '<span class="badge pending">Includes uncommitted changes</span>' : ''}
       ${current?.mode === 'uncommitted' ? '<span class="badge pending">Uncommitted changes only</span>' : ''}
     </div>

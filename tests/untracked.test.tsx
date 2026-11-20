@@ -6,15 +6,36 @@ import { clone, kids0, rowOf, STACK, start } from './setup'
 import type { World } from './world'
 
 describe('branches without a stack', () => {
-  test('a plain git branch is shown with a note, without Sync', async ($, on) => {
+  test('a plain git branch is shown without a note and without Sync', async ($, on) => {
     const world: World = { kind: 'untracked', current: 'adrian/quick-fix', branches: [{ name: 'adrian/quick-fix', parent: 'main', added: 4, removed: 1 }] }
     const { draw, rec } = await start($, on, world)
     const { ui, tree } = await draw()
     emit('band', 'untracked', tree)
 
     expect(rec.unknown).toEqual([])
-    expect(text(tree)).toContain('not tracked by Graphite')
+    expect(text(tree)).not.toContain('not in a stack')
     expect(labels(kids0(tree))).not.toContain('Sync with main')
+    expect(alignmentProblems(tree)).toEqual([])
+    await ui.unmount()
+  })
+
+  test('several plain branches side by side get no stack note', async ($, on) => {
+    const world: World = {
+      kind: 'untracked',
+      current: 'adrian/quick-fix',
+      branches: [
+        { name: 'adrian/quick-fix', parent: 'main', added: 4, removed: 1 },
+        { name: 'adrian/other-fix', parent: 'main', added: 2, removed: 0 },
+      ],
+    }
+    world.override = argv =>
+      argv.join(' ') === 'git reflog --date=unix --format=%gd %gs HEAD'
+        ? { exitCode: 0, stdout: 'HEAD@{1800000100} checkout: moving from adrian/other-fix to adrian/quick-fix\n', stderr: '' }
+        : undefined
+    const { draw } = await start($, on, world)
+    const { ui, tree } = await draw()
+    emit('band', 'untracked-several', tree)
+    expect(text(tree)).not.toContain('not in a stack')
     expect(alignmentProblems(tree)).toEqual([])
     await ui.unmount()
   })

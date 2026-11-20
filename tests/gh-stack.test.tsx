@@ -8,7 +8,7 @@ import type { World } from './world'
 describe('GitHub stacks', () => {
   const GH: World = { ...clone(STACK), kind: 'gh-stack' }
 
-  test('are named GitHub stack and have no per-branch restack button', async ($, on) => {
+  test('are titled Code changes and have no per-branch restack button', async ($, on) => {
     const world = clone(GH)
     world.branches[1]!.needsRestack = true
     const { draw, rec } = await start($, on, world)
@@ -16,7 +16,7 @@ describe('GitHub stacks', () => {
     emit('band', 'gh-stack', tree)
 
     expect(rec.unknown).toEqual([])
-    expect(text(kids0(tree))).toContain('GitHub stack')
+    expect(text(kids0(tree))).toContain('Code changes')
     expect(labels(tree).some(l => l.includes('restack'))).toBe(false)
     expect(alignmentProblems(tree)).toEqual([])
     await ui.unmount()

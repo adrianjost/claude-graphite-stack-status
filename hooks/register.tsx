@@ -1951,7 +1951,7 @@ export const register: Register = (on, options) => {
     void checkUpdate($)
     await $.command.register({
       name: 'stack',
-      description: 'Show or hide the Graphite stack above the prompt',
+      description: 'Show or hide the code changes above the prompt',
     })
     await $.tool
       .register({
@@ -1983,7 +1983,7 @@ export const register: Register = (on, options) => {
     const hidden = await update($, isHidden, h => !h)
     if (!hidden) void refresh($, 'force')
 
-    return { text: hidden ? 'Graphite stack hidden.' : 'Graphite stack shown.' }
+    return { text: hidden ? 'Code changes hidden.' : 'Code changes shown.' }
   })
 
   on('turn.start', async ($, e, next) => {
@@ -2089,7 +2089,7 @@ export const register: Register = (on, options) => {
           </Box>
         ) : null}
         <Box flexDirection="row" alignItems="center" gap={1} marginBottom={1}>
-          <Text bold>{s.source === 'gh-stack' ? 'GitHub stack' : 'Graphite stack'}</Text>
+          <Text bold>Code changes</Text>
           <Text dimColor>{summary}</Text>
           <Box flexGrow={1} />
           <Button key="review" plain dimColor label="Review stack" onPress={() => void openReview($, s.branch)} />
@@ -2184,7 +2184,7 @@ export const register: Register = (on, options) => {
                 </Box>
               </Box>
               )}
-              <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
+              <Box flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden" marginLeft={-1}>
                 {pr ? (
                   <Button key={`open-${row.branch}`} plain label={pr.title} onPress={() => void openReview($, row.branch)} />
                 ) : row.uncommittedOnly ? (
@@ -2193,11 +2193,6 @@ export const register: Register = (on, options) => {
                   <Button key={`open-${row.branch}`} plain dimColor label={row.branch} onPress={() => void openReview($, row.isTrunk ? s.branch : row.branch)} />
                 )}
               </Box>
-              {s.untracked && !row.isTrunk && !row.uncommittedOnly && (
-                <Box flexShrink={0}>
-                  <Text dimColor>not tracked by Graphite</Text>
-                </Box>
-              )}
               {row.needsRestack && s.source !== 'gh-stack' && (
                 <Box flexShrink={0}>
                   <Button

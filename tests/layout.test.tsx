@@ -13,7 +13,7 @@ describe('band layout', () => {
 
     expect(rec.unknown).toEqual([])
     expect(alignmentProblems(tree)).toEqual([])
-    expect(text(kids0(tree))).toContain('Graphite stack')
+    expect(text(kids0(tree))).toContain('Code changes')
     expect(text(kids0(tree))).toContain('3 PRs · 1 failing')
     expect(stackRows(tree)).toHaveLength(4)
     // top of the stack first, trunk last

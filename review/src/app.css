@@ -1766,11 +1766,6 @@ td.ln[data-line]:has(+ td.code:hover) {
   color: var(--muted);
 }
 
-.untracked-note {
-  color: var(--muted);
-  font-style: italic;
-}
-
 .suggestion {
   margin: 8px 0;
   white-space: normal;
