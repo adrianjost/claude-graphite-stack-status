@@ -1,6 +1,6 @@
 {
   "name": "graphite-stack",
-  "version": "3.24.0",
+  "version": "3.25.0",
   "description": "Shows the Graphite stack of your current branch above the Claude Code prompt: stack tree, PR state, review status, open conversations, failing CI and labels, plus a live review page for its diffs.",
   "author": {
     "name": "Adrian Jost",
@@ -16,5 +16,37 @@
     "pull-requests",
     "ci"
   ],
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "excludeTests": {
+      "type": "boolean",
+      "title": "Leave tests out of line counts",
+      "description": "Count added and removed lines in the band without test files (*.test.*, *.spec.*, __tests__/ and similar).",
+      "default": false
+    },
+    "showGraphite": {
+      "type": "boolean",
+      "title": "Show 📚 Graphite links",
+      "description": "Show a link to each PR on Graphite at the end of its row.",
+      "default": true
+    },
+    "showGithub": {
+      "type": "boolean",
+      "title": "Show 🐙 GitHub links",
+      "description": "Show a link to each PR on GitHub at the end of its row.",
+      "default": true
+    },
+    "githubHost": {
+      "type": "string",
+      "title": "GitHub host",
+      "description": "Your GitHub Enterprise host, for example github.mycorp.com. Leave empty for github.com.",
+      "default": ""
+    },
+    "graphiteUrl": {
+      "type": "string",
+      "title": "Graphite URL",
+      "description": "Base address of Graphite for the 📚 links. Leave empty for https://app.graphite.com.",
+      "default": ""
+    }
+  }
 }
