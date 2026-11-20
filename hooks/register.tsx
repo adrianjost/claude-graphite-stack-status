@@ -2030,7 +2030,7 @@ export const register: Register = (on, options) => {
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const ran = await next(e)
-    if (GITHUB_COMMAND.test(e.command)) requestRefresh($, 'github')
+    if (GITHUB_COMMAND.test(e.command)) requestRefresh($, 'force')
     else if (/\b(gt|git|gh\s+stack)\s/.test(e.command)) requestRefresh($, 'local')
 
     return ran
