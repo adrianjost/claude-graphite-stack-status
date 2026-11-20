@@ -92,6 +92,28 @@ describe('band layout', () => {
     await ui.unmount()
   })
 
+  test('another Graphite stack this session switched to gets its own lane off main', async ($, on) => {
+    const world = clone(STACK)
+    world.branches.push({ name: 'adrian/side-fix', parent: 'main', added: 3, removed: 1 })
+    world.prs!['adrian/side-fix'] = { number: 31200, title: '🐛 Fix the side thing' }
+    world.override = argv =>
+      argv.join(' ') === 'git reflog --date=unix --format=%gd %gs HEAD'
+        ? { exitCode: 0, stdout: 'HEAD@{1800000100} checkout: moving from adrian/side-fix to adrian/parents-gate\n', stderr: '' }
+        : undefined
+    const { draw } = await start($, on, world)
+    const { ui, tree } = await draw()
+    emit('band', 'graphite-two-stacks', tree)
+    expect(stackRows(tree).map(r => String((r.children?.[0] as Node).props?.alt ?? ''))).toEqual([
+      'adrian/parents-questions on adrian/parents-gate',
+      'adrian/parents-gate on adrian/shared-story-intro',
+      'adrian/shared-story-intro on main',
+      'adrian/side-fix on main',
+      'main',
+    ])
+    expect(alignmentProblems(tree)).toEqual([])
+    await ui.unmount()
+  })
+
   test('the header has review, sync, refresh and hide', async ($, on) => {
     const { draw } = await start($, on, STACK)
     const { ui, tree } = await draw()

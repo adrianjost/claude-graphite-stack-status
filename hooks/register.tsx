@@ -736,13 +736,22 @@ async function buildRows($: Engine, cwd: string, branch: string): Promise<Built 
     const parent = meta.get(name)?.parent_branch_name
     return parent && meta.has(parent) ? parent : undefined
   }
-  let root = branch
-  const seen = new Set([root])
-  for (let parent = parentOf(root); parent && parent !== trunk && !seen.has(parent); parent = parentOf(parent)) {
-    seen.add(parent)
-    root = parent
+  const rootOf = (name: string) => {
+    let root = name
+    const seen = new Set([root])
+    for (let parent = parentOf(root); parent && parent !== trunk && !seen.has(parent); parent = parentOf(parent)) {
+      seen.add(parent)
+      root = parent
+    }
+    return root
   }
+  const root = rootOf(branch)
   const detached = parentOf(root) ? undefined : root
+  // other stacks this session worked on, each drawn as its own lane off trunk
+  const [switched, withPr] = await Promise.all([sessionBranches($, cwd, await read($, sessionStart)), sessionPrBranches($, cwd)])
+  const roots = [root, ...[...withPr, ...switched].filter(name => name !== trunk && meta.has(name)).map(rootOf)].filter(
+    (name, i, all) => all.indexOf(name) === i,
+  )
 
   const childrenOf = (name: string) =>
     (JSON.parse(meta.get(name)?.children ?? '[]') as string[]).filter(child => meta.has(child))
@@ -779,10 +788,15 @@ async function buildRows($: Engine, cwd: string, branch: string): Promise<Built 
       needsRestack: false,
     })
   }
-  layout(root, 0, [], [], trunk)
+  const tops: number[] = []
+  roots.forEach((name, i) => {
+    const col = i ? columns : 0
+    layout(name, col, [...tops], roots.slice(0, i), trunk)
+    tops.push(col)
+  })
   rows.push({
     branch: trunk,
-    lane: { col: 0, up: true, down: false, pipes: [], corners: [], upOwner: root },
+    lane: { col: 0, up: true, down: false, pipes: [], corners: tops.slice(1), cornerOwners: roots.slice(1), upOwner: root },
     isCurrent: trunk === branch,
     isTrunk: true,
     needsRestack: false,

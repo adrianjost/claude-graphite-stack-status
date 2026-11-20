@@ -6,7 +6,7 @@ A Claude Code plugin that shows the [Graphite](https://graphite.dev) stack of th
 
 ## What it shows
 
-One row per branch, drawn as the same tree `gt log` draws, from the branch above trunk up to every descendant, side branches included.
+One row per branch, drawn as the same tree `gt log` draws, from the branch above trunk up to every descendant, side branches included. Other Graphite stacks this session checked out or opened PRs for get their own lane off trunk.
 
 | | |
 |---|---|
