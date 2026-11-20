@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface as Engine, Register, Timer } from 'claude-code'
+import type { EngineInterface as Engine, Register, RenderChildren, Timer } from 'claude-code'
 
-import type { CiState, Issue, Lane, PrInfo, ReviewReply, StackRow, StackSnapshot, UpdateInfo, WaitingPrompt } from '../types'
+import type { CiState, Issue, Lane, PrInfo, Settings, ReviewReply, StackRow, StackSnapshot, UpdateInfo, WaitingPrompt } from '../types'
 
 const POLL_MS = 60_000
 const POLL_BUSY_MS = 30_000
@@ -20,10 +20,12 @@ const waitingPrompts = atom({ plugin: 'graphite-stack', key: 'waitingPrompts' } 
 const reviewReplies = atom({ plugin: 'graphite-stack', key: 'reviewReplies' } as const, {} as Record<string, ReviewReply>)
 const sessionStart = atom({ plugin: 'graphite-stack', key: 'sessionStart' } as const, null as number | null)
 const updateInfo = atom({ plugin: 'graphite-stack', key: 'updateInfo' } as const, null as UpdateInfo | null)
-const excludeTests = atom({ plugin: 'graphite-stack', key: 'excludeTests' } as const, false)
+const DEFAULT_SETTINGS: Settings = { excludeTests: false, showGraphite: true, showGithub: true, githubHost: 'github.com', graphiteUrl: 'https://app.graphite.com' }
+const settings = atom({ plugin: 'graphite-stack', key: 'settings' } as const, DEFAULT_SETTINGS)
+const settingsOpen = atom({ plugin: 'graphite-stack', key: 'settingsOpen' } as const, false)
+let prefs = DEFAULT_SETTINGS
 const TEST_FILE = /(^|\/)(__tests__|__mocks__|tests?|specs?|e2e)\/|\.(test|spec|e2e)\.[^/]+$|_test\.[^/]+$|(^|\/)test_[^/]+\.py$/
-let skipTests = false
-const counts = (path: string) => !skipTests || !TEST_FILE.test(path.replace(/\{[^}]*=> ([^}]*)\}/, '$1').replace(/^.* => /, ''))
+const counts = (path: string) => !prefs.excludeTests || !TEST_FILE.test(path.replace(/\{[^}]*=> ([^}]*)\}/, '$1').replace(/^.* => /, ''))
 const REPLY_TOOL = 'mcp__graphite-stack__review_reply'
 const REPLY_LINE = `When done, call ${REPLY_TOOL} once: refs you addressed in \`fixed\`; a one-sentence reply only for questions or anything you didn't do.`
 const MAX_REPLIES = 200
@@ -111,7 +113,9 @@ const TOOLS: Record<string, string> = {
 
 async function exec($: Engine, cwd: string, argv: string[], timeoutMs = 30_000) {
   try {
-    return await $.process.run(argv, { cwd, timeoutMs })
+    const host = prefs.githubHost
+    const args = argv[0] === 'gh' && argv[1] === 'api' && host !== 'github.com' ? ['gh', 'api', '--hostname', host, ...argv.slice(2)] : argv
+    return await $.process.run(args, { cwd, timeoutMs })
   } catch (error) {
     const tool = argv[0] ?? ''
     throw new Problem({
@@ -370,7 +374,8 @@ class GitHubError extends Error {}
 
 async function githubRepo($: Engine, cwd: string) {
   const url = (await run($, cwd, ['git', 'remote', 'get-url', 'origin'])) ?? ''
-  const [, owner, name] = url.match(/github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?$/) ?? []
+  const host = prefs.githubHost.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const [, owner, name] = url.match(new RegExp(`${host}[:/]([^/]+)/([^/]+?)(?:\\.git)?$`)) ?? []
   return owner && name ? { owner, name } : undefined
 }
 
@@ -636,12 +641,53 @@ async function readMetadata($: Engine, cwd: string, gitDir: string) {
   return JSON.parse(result.stdout.trim() || '[]') as MetaRow[]
 }
 
-type Built = { rows: StackRow[]; columns: number; detached?: string; untracked?: boolean }
+type Built = { rows: StackRow[]; columns: number; detached?: string; untracked?: boolean; source?: 'graphite' | 'gh-stack' }
+
+type GhStackFile = { stacks?: { trunk?: { branch?: string }; branches?: { branch?: string }[] }[] }
+
+async function ghStackMeta($: Engine, cwd: string, gitDir: string, branch: string): Promise<MetaRow[] | undefined> {
+  const text = await run($, cwd, ['cat', `${gitDir}/gh-stack`])
+  if (!text) return undefined
+  let file: GhStackFile
+  try {
+    file = JSON.parse(text) as GhStackFile
+  } catch {
+    return undefined
+  }
+  for (const stack of file.stacks ?? []) {
+    const names = (stack.branches ?? []).flatMap(b => (b.branch ? [b.branch] : []))
+    const trunk = stack.trunk?.branch ?? 'main'
+    if (!names.includes(branch)) continue
+    const chain = [trunk, ...names]
+    return chain.map((name, i) => ({
+      branch_name: name,
+      parent_branch_name: i ? (chain[i - 1] ?? null) : null,
+      children: JSON.stringify(chain[i + 1] ? [chain[i + 1]] : []),
+      validation_result: i ? 'VALID' : 'TRUNK',
+    }))
+  }
+  return undefined
+}
 
 async function buildRows($: Engine, cwd: string, branch: string): Promise<Built | string> {
   const gitDir = await run($, cwd, ['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'])
   if (!gitDir) return 'Not a git repository.'
-  const metadata = await readMetadata($, cwd, gitDir)
+  let metadata: MetaRow[] | undefined
+  let source: 'graphite' | 'gh-stack' = 'graphite'
+  let failure: unknown
+  try {
+    metadata = await readMetadata($, cwd, gitDir)
+  } catch (error) {
+    failure = error
+  }
+  if (!metadata?.some(row => row.branch_name === branch && row.validation_result !== 'TRUNK')) {
+    const fromGh = await ghStackMeta($, cwd, gitDir, branch)
+    if (fromGh) {
+      metadata = fromGh
+      source = 'gh-stack'
+    }
+  }
+  if (failure && source === 'graphite') throw failure
   if (!metadata) return 'No Graphite metadata in this repository.'
   const meta = new Map<string, MetaRow>()
   for (const row of metadata) meta.set(row.branch_name, row)
@@ -706,7 +752,7 @@ async function buildRows($: Engine, cwd: string, branch: string): Promise<Built 
     needsRestack: false,
   })
 
-  return { rows, columns, detached }
+  return { rows, columns, detached, source }
 }
 
 function requestRefresh($: Engine, mode: Mode) {
@@ -739,16 +785,29 @@ async function schedulePoll($: Engine) {
   })
 }
 
+async function saveSettings($: Engine, change: Partial<Settings>) {
+  const before = prefs
+  prefs = { ...prefs, ...change }
+  await update($, settings, () => prefs)
+  await $.store.set('settings', prefs)
+  if (before.excludeTests !== prefs.excludeTests) requestRefresh($, 'local')
+  if (before.githubHost !== prefs.githubHost) requestRefresh($, 'force')
+}
+
 async function stackAction($: Engine, branch?: string) {
   if (await read($, working)) return
   const label = branch ? `Restacking ${branch}…` : 'Syncing with main…'
   await update($, working, () => label)
+  const isGh = (await read($, snapshot)).source === 'gh-stack'
   const handOff = (reason: string) =>
     void $.prompt.submit({
-      text:
-        `${reason} Bring my Graphite stack up to date with origin/main: run \`gt sync\` (accept updating trunk and ` +
-        'deleting merged branches), then `gt restack`, resolving any conflicts (`gt continue` after each). ' +
-        "Switch back to the branch I was on afterwards, don't push anything, and tell me what changed.",
+      text: isGh
+        ? `${reason} Bring my GitHub stack up to date with origin/main: run \`gh stack rebase\`, resolving any conflicts ` +
+          '(`gh stack rebase --continue` after each). Don\'t use `gh stack sync`, it pushes. ' +
+          "Switch back to the branch I was on afterwards, don't push anything, and tell me what changed."
+        : `${reason} Bring my Graphite stack up to date with origin/main: run \`gt sync\` (accept updating trunk and ` +
+          'deleting merged branches), then `gt restack`, resolving any conflicts (`gt continue` after each). ' +
+          "Switch back to the branch I was on afterwards, don't push anything, and tell me what changed.",
       asUser: true,
     })
   try {
@@ -757,10 +816,12 @@ async function stackAction($: Engine, branch?: string) {
     const dirty = await run($, cwd, ['git', 'status', '--porcelain', '--untracked-files=no'])
     if (dirty) return handOff('The working tree has uncommitted changes, so the graphite-stack plugin did not sync on its own.')
 
-    const steps = [
-      ['gt', 'sync', '--force', '--no-interactive'],
-      ['gt', 'restack', '--no-interactive', ...(branch ? ['--branch', branch] : [])],
-    ]
+    const steps = isGh
+      ? [['gh', 'stack', 'rebase']]
+      : [
+          ['gt', 'sync', '--force', '--no-interactive'],
+          ['gt', 'restack', '--no-interactive', ...(branch ? ['--branch', branch] : [])],
+        ]
     for (const argv of steps) {
       const result = await exec($, cwd, argv, STACK_ACTION_TIMEOUT_MS)
       if (result.exitCode === 0) continue
@@ -771,8 +832,8 @@ async function stackAction($: Engine, branch?: string) {
         text:
           `\`${argv.join(' ')}\` ${rebasing ? 'stopped on a conflict' : 'failed'}:\n\n\`\`\`\n${output}\n\`\`\`\n\n` +
           (rebasing
-            ? 'Resolve the conflicts and run `gt continue` until the restack finishes. '
-            : 'Find out what went wrong and finish syncing and restacking my Graphite stack. ') +
+            ? `Resolve the conflicts and run \`${isGh ? 'gh stack rebase --continue' : 'gt continue'}\` until the restack finishes. `
+            : `Find out what went wrong and finish syncing and restacking my ${isGh ? 'GitHub' : 'Graphite'} stack. `) +
           `Switch back to ${original ? `\`${original}\`` : 'the branch I was on'} afterwards and don't push anything.`,
         asUser: true,
       })
@@ -870,6 +931,7 @@ async function pushReview($: Engine) {
     repo: cwd.split('/').pop(),
     trunk: trunkOf(s.rows),
     untracked: s.untracked,
+    source: s.source,
     current: s.branch,
     generated: GENERATED.source,
     rows: s.rows.map(row => ({
@@ -1313,6 +1375,14 @@ async function pollReviewActions($: Engine, port: number) {
           )
           results[action.id] = { ok: true, data: { queued: turnRunning } }
         }
+        else if (current.source === 'gh-stack') {
+          await queuePrompt(
+            $,
+            `Submit my GitHub stack up to ${layerLabel(rows, row.branch)} with \`gh stack submit\`, which opens its PRs as drafts. ` +
+              "Use the commit messages as PR titles and descriptions, and don't change any code.",
+          )
+          results[action.id] = { ok: true, data: { queued: turnRunning } }
+        }
         else {
           await queuePrompt(
             $,
@@ -1534,6 +1604,7 @@ async function refresh($: Engine, mode: Mode) {
       isStale,
       hold: undefined,
       untracked: built.untracked,
+      source: built.source,
       githubIssue: ghIssue,
       issue: ghIssue ?? (built.detached ? detachedIssue(built.detached, built.rows.find(row => row.isTrunk)?.branch ?? 'main') : undefined),
       isLoading: false,
@@ -1805,8 +1876,8 @@ function labelsSvg(labels: PrInfo['labels']) {
 }
 
 function graphiteUrl(pr: PrInfo) {
-  const [, owner, repo] = pr.url.match(/github\.com\/([^/]+)\/([^/]+)\//) ?? []
-  return owner && repo ? `https://app.graphite.com/github/pr/${owner}/${repo}/${pr.number}` : pr.url
+  const [, owner, repo] = pr.url.match(/^https?:\/\/[^/]+\/([^/]+)\/([^/]+)\//) ?? []
+  return owner && repo ? `${prefs.graphiteUrl}/github/pr/${owner}/${repo}/${pr.number}` : pr.url
 }
 
 const fixPrompt = (issue: Issue) =>
@@ -1820,8 +1891,9 @@ export const register: Register = on => {
     const started = await next(e)
     await update($, sessionStart, at => at ?? Date.now())
     void checkUpdate($)
-    skipTests = (await $.store.get('excludeTests')) === true
-    await update($, excludeTests, () => skipTests)
+    const saved = (await $.store.get('settings')) as Partial<Settings> | undefined
+    prefs = { ...DEFAULT_SETTINGS, ...(await $.store.get('excludeTests')) === true ? { excludeTests: true } : {}, ...saved }
+    await update($, settings, () => prefs)
     await $.command.register({
       name: 'stack',
       description: 'Show or hide the Graphite stack above the prompt',
@@ -1922,7 +1994,55 @@ export const register: Register = on => {
     if (e.surface !== 'desktop') return next(e)
     const elements = $.ui.resolve(e)
     if (!('Svg' in elements)) return next(e)
-    const { Box, Text, Button, Link, Svg } = elements
+    const { Box, Text, Button, Link, Svg, Select, Input } = elements
+    if (await read($, settingsOpen)) {
+      await read($, settings)
+      const current = prefs
+      const field = (key: string, label: string, control: RenderChildren) => (
+        <Box key={`row-${key}`} flexDirection="row" alignItems="center" gap={1}>
+          <Box width={18} flexShrink={0}><Text dimColor>{label}</Text></Box>
+          {control}
+        </Box>
+      )
+      const toggle = (key: 'excludeTests' | 'showGraphite' | 'showGithub', label: string, onLabel: string, offLabel: string, value: boolean) =>
+        field(key, label,
+          <Select
+            key={`set-${key}`}
+            value={value ? 'on' : 'off'}
+            options={[{ value: 'on', label: onLabel }, { value: 'off', label: offLabel }]}
+            onSelect={choice => void saveSettings($, { [key]: choice === 'on' })}
+          />,
+        )
+      return (
+        <Box flexDirection="column" gap={1}>
+          <Box flexDirection="row" alignItems="center" gap={1}>
+            <Text bold>Stack settings</Text>
+            <Box flexGrow={1} />
+            <Button key="settings-done" plain label="Done" onPress={() => void update($, settingsOpen, () => false)} />
+          </Box>
+          {toggle('excludeTests', 'Line counts', 'Without test files', 'With test files', current.excludeTests)}
+          {toggle('showGraphite', '📚 Graphite links', 'Shown', 'Hidden', current.showGraphite)}
+          {toggle('showGithub', '🐙 GitHub links', 'Shown', 'Hidden', current.showGithub)}
+          {field('github-host', 'GitHub host', <Input
+            key="set-github-host"
+            placeholder="github.com, or your GitHub Enterprise host"
+            value={current.githubHost}
+            submitLabel="Save"
+            onSubmit={value => void saveSettings($, { githubHost: value.trim().replace(/^https?:\/\//, '').replace(/\/+$/, '') || DEFAULT_SETTINGS.githubHost })}
+          />)}
+          {field('graphite-url', 'Graphite URL', <Input
+            key="set-graphite-url"
+            placeholder={DEFAULT_SETTINGS.graphiteUrl}
+            value={current.graphiteUrl}
+            submitLabel="Save"
+            onSubmit={value => {
+              const url = value.trim().replace(/\/+$/, '')
+              void saveSettings($, { graphiteUrl: /^https?:\/\/\S+$/.test(url) ? url : DEFAULT_SETTINGS.graphiteUrl })
+            }}
+          />)}
+        </Box>
+      )
+    }
 
     const busy = await read($, working)
     const behind = new Set(s.rows.filter(row => row.needsRestack).map(row => row.branch))
@@ -1961,21 +2081,9 @@ export const register: Register = on => {
           </Box>
         ) : null}
         <Box flexDirection="row" alignItems="center" gap={1} marginBottom={1}>
-          <Text bold>Graphite stack</Text>
+          <Text bold>{s.source === 'gh-stack' ? 'GitHub stack' : 'Graphite stack'}</Text>
           <Text dimColor>{summary}</Text>
           <Box flexGrow={1} />
-          <Button
-            key="tests"
-            plain
-            dimColor
-            label={(await read($, excludeTests)) ? 'Line counts: without tests' : 'Line counts: with tests'}
-            onPress={() => {
-              skipTests = !skipTests
-              void update($, excludeTests, () => skipTests)
-              void $.store.set('excludeTests', skipTests)
-              requestRefresh($, 'local')
-            }}
-          />
           <Button key="review" plain dimColor label="Review stack" onPress={() => void openReview($, s.branch)} />
           {!s.untracked && (
             <Button
@@ -1986,6 +2094,7 @@ export const register: Register = on => {
               onPress={() => void stackAction($)}
             />
           )}
+          <Button key="settings" plain dimColor label="⚙" onPress={() => void update($, settingsOpen, () => true)} />
           <Button key="refresh" plain dimColor label="↻" onPress={() => void refresh($, 'force')} />
           <Button key="hide" plain dimColor label="✕" onPress={() => void update($, isHidden, () => true)} />
         </Box>
@@ -2139,10 +2248,10 @@ export const register: Register = on => {
                   </Box>
                 )
               })()}
-              {prs.length > 0 && (
+              {prs.length > 0 && (prefs.showGraphite || prefs.showGithub) && (
                 <Box key={`links-${row.branch}`} flexDirection="row" alignItems="center" gap={1} flexShrink={0} width={6}>
-                  {pr && <Link key={`gt-${row.branch}`} href={graphiteUrl(pr)} label="📚" />}
-                  {pr && <Link key={`gh-${row.branch}`} href={pr.url} label="🐙" />}
+                  {pr && prefs.showGraphite && <Link key={`gt-${row.branch}`} href={graphiteUrl(pr)} label="📚" />}
+                  {pr && prefs.showGithub && <Link key={`gh-${row.branch}`} href={pr.url} label="🐙" />}
                 </Box>
               )}
             </Box>

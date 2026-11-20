@@ -55,6 +55,8 @@ export type StackRow = {
   diff?: { added: number; removed: number }
 }
 
+export type Settings = { excludeTests: boolean; showGraphite: boolean; showGithub: boolean; githubHost: string; graphiteUrl: string }
+
 export type StackSnapshot = {
   branch: string
   rows: StackRow[]
@@ -63,6 +65,7 @@ export type StackSnapshot = {
   isStale?: boolean
   hold?: string
   untracked?: boolean
+  source?: 'graphite' | 'gh-stack'
   issue?: Issue
   githubIssue?: Issue
   isLoading: boolean
@@ -73,6 +76,6 @@ declare module 'claude-code' {
     'mcp__graphite-stack__review_reply': { fixed?: string[]; replies?: { ref: string; text: string }[] }
   }
   interface PluginState {
-    'graphite-stack': { snapshot: StackSnapshot; isHidden: boolean; working: string | null; reviewUrl: string | null; waitingPrompts: WaitingPrompt[]; reviewReplies: Record<string, ReviewReply>; updateInfo: UpdateInfo | null; sessionStart: number | null; excludeTests: boolean }
+    'graphite-stack': { snapshot: StackSnapshot; isHidden: boolean; working: string | null; reviewUrl: string | null; waitingPrompts: WaitingPrompt[]; reviewReplies: Record<string, ReviewReply>; updateInfo: UpdateInfo | null; sessionStart: number | null; settings: Settings; settingsOpen: boolean }
   }
 }

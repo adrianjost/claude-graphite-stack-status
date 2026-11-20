@@ -906,6 +906,7 @@ function fileCard(file) {
 }
 
 function renderStack() {
+  $('#stack-kind').textContent = state.source === 'gh-stack' ? 'GitHub stack' : state.untracked ? 'Branches' : 'Graphite stack'
   $('#stack').innerHTML = state.rows
     .map(row => {
       const pr = row.pr
