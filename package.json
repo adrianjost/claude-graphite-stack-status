@@ -4,9 +4,12 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p .",
+    "test": "node scripts/test.mjs",
+    "test:update": "node scripts/test.mjs --update-snapshots"
   },
   "devDependencies": {
+    "@playwright/test": "1.60.0",
     "diff": "9.0.0",
     "dompurify": "3.4.18",
     "esbuild": "0.28.2",

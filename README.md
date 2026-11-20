@@ -18,7 +18,7 @@ One row per branch, drawn as the same tree `gt log` draws, from the branch above
 | **Badges** | the PR's GitHub labels, in their colors; hover one for its description; when they don't fit, `+N` shows the rest on hover |
 | **+12 −3** | lines added and removed against the parent branch, ignoring whitespace; hover and click **Review ↗** to open that branch on the review page |
 
-The title links to the PR. GitHub data refreshes every minute, every 30 seconds while CI is running, and every 5 minutes after 10 quiet minutes. It also refreshes right after Claude runs `git push`, `gt submit`, `gt sync` or `gh pr …`. Other `git`/`gt` commands only re-read the local stack. Sessions on the same repo share results, and polling pauses while no app window shows the session.
+The title links to the PR. GitHub data refreshes every minute, every 30 seconds while CI is running, and every 5 minutes after 10 quiet minutes. It also refreshes right after Claude runs `git push`, `gt submit`, `gt sync`, `gh stack submit`/`push`/`sync` or `gh pr …`, skipping the shared cache. Other `git`/`gt` commands only re-read the local stack. Sessions on the same repo share results, and polling pauses while no app window shows the session.
 
 ## Install
 
@@ -92,6 +92,25 @@ npm run build
 ```
 
 CI checks that the committed bundle matches a fresh build and runs `npm audit`; Dependabot proposes dependency updates weekly.
+
+### Tests
+
+```bash
+npm test
+```
+
+This runs two layers:
+
+1. **Plugin tests** (`tests/*.test.tsx`) run with `claude plugin test` against a fake git, Graphite and GitHub (`tests/world.tsx`). They draw the band and check what it shows, that every row lines up (`alignmentProblems` in `tests/tree.ts`), what the buttons run or ask Claude, when the band refreshes, the settings, the update banner, and what the plugin sends to the review page and does with its actions.
+2. **Browser tests** (`tests/visual/*.spec.mjs`) run with Playwright. They render each band the plugin tests drew, in light and dark, and open the review page on the real review server with fixture repos, then compare screenshots and click through pushing, committing, submitting, reviewing and marking files viewed.
+
+When a change to the looks is intended, check the failing screenshots in `tests/.out/results`, then accept them:
+
+```bash
+npm run test:update
+```
+
+The screenshots are taken on macOS; fonts differ on other systems. The band's renderer (`tests/visual/band-html.mjs`) approximates how the desktop app paints the band, so it catches layout changes but isn't the app's exact look.
 
 ## License
 
