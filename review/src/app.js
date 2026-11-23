@@ -135,6 +135,7 @@ function select(branch) {
   collapsed = new Set()
   expansions = new Map()
   descriptionOpen = false
+  commitView = null
   comments = stored(`comments:${branch}`, [])
   sent = stored(`sent:${branch}`, [])
   restoreDraft()
@@ -964,8 +965,51 @@ function renderSidebar() {
   const commits = current?.commits ?? []
   $('#commits-section').hidden = !commits.length
   $('#commits').innerHTML = commits
-    .map(c => `<div class="commit" title="${esc(`${c.subject}\n${c.author}, ${c.when}`)}"><code>${esc(c.sha)}</code><span>${esc(c.subject)}</span></div>`)
+    .map(
+      c =>
+        `<div class="commit${c.full === commitView ? ' active' : ''}" data-commit="${esc(c.full ?? '')}" title="${esc(`${c.subject}\n${c.author}, ${c.when}\nClick to see this commit on its own`)}"><code>${esc(c.sha)}</code><span>${esc(c.subject)}</span></div>`,
+    )
     .join('')
+}
+
+/* single commit */
+
+let commitView = null
+const commitDiffs = new Map()
+
+function showCommit(sha) {
+  commitView = sha || null
+  renderSidebar()
+  renderCommit()
+  window.scrollTo(0, 0)
+}
+
+async function renderCommit() {
+  const section = $('#commit-view')
+  const commits = current?.commits ?? []
+  const at = commits.findIndex(c => c.full === commitView)
+  if (at < 0) commitView = null
+  section.hidden = !commitView
+  document.body.classList.toggle('commit-view', !!commitView)
+  if (!commitView) return
+  const c = commits[at]
+  const key = `${c.full}:${prefs.whitespace ? 1 : 0}`
+  const older = commits[at + 1]
+  const newer = commits[at - 1]
+  section.innerHTML = `<div class="commit-nav">
+      <button class="btn small" data-commit="" title="Back to all changes of the branch">← All changes</button>
+      <span class="muted">Commit ${commits.length - at} of ${commits.length}</span>
+      <button class="btn small" data-commit="${esc(older?.full ?? '')}" ${older ? '' : 'disabled'} title="Older commit">‹ Older</button>
+      <button class="btn small" data-commit="${esc(newer?.full ?? '')}" ${newer ? '' : 'disabled'} title="Newer commit">Newer ›</button>
+    </div>
+    <div class="commit-message"><div class="commit-title">${esc(c.subject)}</div>${c.body ? `<div class="commit-body">${esc(c.body)}</div>` : ''}
+      <div class="muted commit-meta"><code>${esc(c.sha)}</code> · ${esc(c.author)}, ${esc(c.when)}</div></div>
+    <div class="changes-body">${commitDiffs.get(key) ?? '<div class="placeholder">Loading…</div>'}</div>`
+  if (commitDiffs.has(key) || !c.parent) return
+  const params = new URLSearchParams({ from: c.parent, to: c.full, ws: prefs.whitespace ? '1' : '0' })
+  const result = await api(`/changes?${params}`).catch(() => ({ error: 'unreachable' }))
+  commitDiffs.set(key, result.error ? '<div class="placeholder">This commit\'s changes are not available.</div>' : changesHtml(result.diff ?? ''))
+  if (commitView === c.full) renderCommit()
 }
 
 const MEDIA_HOSTS = /^https:\/\/([a-z0-9-]+\.)*(github\.com|githubusercontent\.com)\//i
@@ -997,17 +1041,27 @@ function renderDescription() {
   const draftBody = !pr && current?.branch === selected ? (current?.draft?.body ?? '') : ''
   const body = pr ? (pr.bodyHtml?.trim() ?? '') : draftBody
   const showDraft = !pr && !!current?.draft
-  section.hidden = !body && !showDraft
+  const draft = current?.branch === selected ? current?.draft : undefined
+  const norm = text => (text ?? '').replace(/\r\n/g, '\n').trim()
+  const compare = pr?.body !== undefined && !!draft && (norm(pr.title) !== norm(draft.title) || norm(pr.body) !== norm(draft.body))
+  section.hidden = !body && !showDraft && !compare
   section.classList.toggle('draft', !pr)
+  section.classList.toggle('compare', compare)
   if (section.hidden) {
     descriptionHtml = null
     return
   }
-  const key = `${pr ? 'html' : 'text'}:${body}`
+  const key = `${pr ? 'html' : 'text'}:${body}:${compare ? JSON.stringify(draft) : ''}`
   if (key !== descriptionHtml) {
     descriptionHtml = key
     const target = section.querySelector('.description-body')
-    if (pr) {
+    if (compare) {
+      target.innerHTML = `<p class="draft-note">The PR description differs from the commit message.</p><div class="description-compare">
+        <div><div class="compare-head">PR description</div><div class="commit-title">${esc(pr.title)}</div>${body ? cleanHtml(body) : '<p class="muted">No description.</p>'}</div>
+        <div><div class="compare-head">Commit message</div><div class="commit-title">${esc(draft.title)}</div>${
+          draft.body ? `<div class="commit-body">${esc(draft.body)}</div>` : '<p class="muted">The commit message has no body.</p>'
+        }</div></div>`
+    } else if (pr) {
       target.innerHTML = cleanHtml(body)
     } else {
       target.innerHTML = `<p class="draft-note">Preview from the first commit's message, which becomes the PR title and description.</p>${
@@ -1286,6 +1340,7 @@ function renderAll() {
   renderDiff()
   renderCommentViews()
   renderConversations()
+  renderCommit()
   watchUnread()
   window.scrollTo(0, scroll)
 }
@@ -2342,12 +2397,13 @@ document.addEventListener('click', event => {
   const head = t.closest('.file-head')
   const headToggle =
     head && !t.closest('button, label, input, a') && window.getSelection()?.isCollapsed !== false ? head.querySelector('[data-collapse]') : null
-  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-file-comment],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-restore],[data-jump],[data-describe-edit],[data-send-now],[data-remove-at],[data-thread-act],[data-changes]')
+  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-file-comment],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-restore],[data-jump],[data-describe-edit],[data-send-now],[data-remove-at],[data-thread-act],[data-changes],[data-commit]')
   if (!t.closest('#submit') && !t.closest('[data-act="review"]')) $('#submit').hidden = true
   if (!el) return
   const d = el.dataset
   if (d.threadAct) return threadAct(el)
   if (d.changes) return toggleChanges(d.changes)
+  if (d.commit !== undefined) return showCommit(d.commit)
   if (d.branch !== undefined && !el.classList.contains('trunk')) {
     setView('diff')
     select(d.branch)

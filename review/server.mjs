@@ -121,20 +121,17 @@ async function diffFor(query) {
       : mode === 'all'
         ? (await git(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '-M', ...ws, base])).stdout + (await untrackedDiff(ws.length > 0))
         : (await git(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '-M', ...ws, base, row.branch])).stdout
-  const log = await git(['log', '--no-color', '--format=%h%x1f%s%x1f%an%x1f%cr', `${base}..${row.branch}`])
+  const log = await git(['log', '--no-color', '--format=%h%x1f%H%x1f%P%x1f%s%x1f%an%x1f%cr%x1f%b%x1e', `${base}..${row.branch}`])
   const commits = log.stdout
-    .split('\n')
+    .split('\x1e')
+    .map(entry => entry.replace(/^\n/, ''))
     .filter(Boolean)
-    .map(line => {
-      const [sha, subject, author, when] = line.split('\x1f')
-      return { sha, subject, author, when }
+    .map(entry => {
+      const [sha, full, parents, subject, author, when, body = ''] = entry.split('\x1f')
+      return { sha, full, parent: parents.split(' ')[0], subject, author, when, body: body.trim() }
     })
-  let draft
-  if (!row.pr) {
-    const first = await git(['log', '--no-color', '--reverse', '--format=%s%x1f%b%x1e', `${base}..${row.branch}`])
-    const [title = '', body = ''] = (first.stdout.split('\x1e')[0] ?? '').replace(/^\n/, '').split('\x1f')
-    if (title.trim()) draft = { title: title.trim(), body: body.trim() }
-  }
+  const first = commits.at(-1)
+  const draft = first?.subject.trim() ? { title: first.subject.trim(), body: first.body } : undefined
   return { branch: row.branch, parent, base, head, diff, pending: mode === 'all' ? pending : '', commits, isCurrent, dirty, mode, includeWorktree, draft, uncommittedOnly: row.uncommittedOnly }
 }
 

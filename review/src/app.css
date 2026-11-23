@@ -1898,7 +1898,10 @@ td.ln[data-line]:has(+ td.code:hover) {
 body.conversations-view #header,
 body.conversations-view #description,
 body.conversations-view #notice,
-body.conversations-view #diff {
+body.conversations-view #diff,
+body.conversations-view #commit-view,
+body.commit-view #description,
+body.commit-view #diff {
   display: none;
 }
 
@@ -2071,4 +2074,80 @@ body.conversations-view #commits-section {
 
 .conversation.folded > :not(.conversation-head) {
   display: none;
+}
+
+.commit[data-commit] {
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.commit[data-commit]:hover {
+  background: var(--canvas);
+}
+
+.commit.active {
+  background: var(--canvas);
+  font-weight: 600;
+}
+
+#commit-view {
+  margin-top: 16px;
+}
+
+.commit-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.commit-nav .muted {
+  margin-right: auto;
+  font-size: 12px;
+}
+
+.commit-message {
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.commit-title {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.commit-meta {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+#description.compare {
+  max-width: none;
+}
+
+.description-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.description-compare > div {
+  min-width: 0;
+}
+
+.compare-head {
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+@media (max-width: 800px) {
+  .description-compare {
+    grid-template-columns: 1fr;
+  }
 }

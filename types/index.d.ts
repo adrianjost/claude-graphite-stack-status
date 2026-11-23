@@ -30,6 +30,7 @@ export type PrInfo = {
   threadFp?: string
   hasReviewers: boolean
   reviewers?: { name: string; state: string }[]
+  body?: string
   bodyHtml?: string
 }
 

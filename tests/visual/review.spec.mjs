@@ -77,6 +77,33 @@ test.describe('looks', () => {
     await expect(page.locator('#sidebar')).toHaveScreenshot('gh-stack-sidebar.png')
   })
 
+  test('the PR description next to a differing commit message', async ({ page }) => {
+    const state = stateOf('graphite')
+    const row = state.rows.find(r => r.branch === 'adrian/parents-gate')
+    row.pr.body = 'Gates the chapter until both parents agreed.'
+    row.pr.bodyHtml = '<p>Gates the chapter until both parents agreed.</p>'
+    server = await startServer(repos.stack)
+    await api(server.base, '/state', state)
+    await page.goto(`${server.base}/?t=${TOKEN}#branch=adrian/parents-gate`)
+    await expect(page.locator('.description-compare')).toContainText('Gates the chapter until both parents agreed.')
+    await expect(page.locator('.description-compare')).toContainText('✨ Gate the parents chapter')
+    await expect(page.locator('#description')).toHaveScreenshot('description-compare.png')
+  })
+
+  test('browsing single commits', async ({ page }) => {
+    await open(page)
+    await page.locator('#commits .commit', { hasText: 'open the gate at 16' }).click()
+    await expect(page.locator('#commit-view')).toContainText('Commit 2 of 2')
+    await expect(page.locator('#commit-view .changes-file')).toHaveText(/src\/gate\.ts/)
+    await expect(page.locator('#diff')).toBeHidden()
+    await shot(page, 'commit-view')
+    await page.getByRole('button', { name: '‹ Older' }).click()
+    await expect(page.locator('#commit-view')).toContainText('Commit 1 of 2')
+    await expect(page.locator('#commit-view .commit-title')).toHaveText('✨ Gate the parents chapter')
+    await page.getByRole('button', { name: '← All changes' }).click()
+    await expect(page.locator('#diff')).toBeVisible()
+  })
+
   test('a plain git branch', async ({ page }) => {
     await open(page, { state: 'untracked', repo: 'plain', branch: 'adrian/quick-fix' })
     await expect(page.locator('#stack-source')).toHaveText('')
