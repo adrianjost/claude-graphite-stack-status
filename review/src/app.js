@@ -605,7 +605,7 @@ function threadCard(thread) {
     )
     .join('')
   return `<div class="comment gh${thread.resolved ? ' resolved' : ''}" ${id}>
-    <div class="comment-head">${avatar({ avatarUrl: first?.avatar })}<strong>${esc(first?.author ?? '')}</strong><span class="badge gh">GitHub</span>${
+    <div class="comment-head">${avatar({ avatarUrl: first?.avatar })}<strong>${esc(first?.author ?? '')}</strong>${ghBadge(first?.url)}${
       thread.outdated ? '<span class="badge">Outdated</span>' : ''
     }${thread.resolved ? '<span class="badge sent">Resolved</span>' : ''}${!thread.resolved && wasSent && !inReview ? '<span class="badge sent">Sent to Claude</span>' : ''}${answered ? answerBadge(answered) : ''}${
       inReview ? '<span class="badge pending">In review</span>' : ''
@@ -1446,7 +1446,7 @@ function commentItems(list, kind, followUps = new Map()) {
       const last = chain.at(-1)
       const draft = kind === 'sent' ? followUps.get(last.id) : undefined
       html += `<div class="comment-item${kind === 'sent' ? ' sent' : ''}" data-jump="${jumps.length - 1}">
-        <div class="where">${comment.kind === 'thread' ? '<span class="badge gh">GitHub</span>' : ''}<code>${
+        <div class="where">${comment.kind === 'thread' ? ghBadge(comment.thread?.url) : ''}<code>${
           comment.kind === 'description'
             ? 'PR description'
             : isFile(comment) || comment.file
@@ -1632,6 +1632,11 @@ async function sendComposerNow(button, composer) {
   if (index < 0) return
   await sendNow(comments[index], document.querySelector(`[data-send-now="${index}"]`) ?? button)
 }
+
+const ghBadge = url =>
+  url
+    ? `<a class="badge gh" href="${esc(url)}" target="_blank" rel="noreferrer noopener" title="Open this thread on GitHub">GitHub ↗</a>`
+    : '<span class="badge gh">GitHub</span>'
 
 function threadComment(thread, note = '') {
   const range = thread.file ? { path: thread.path } : { path: thread.path, side: thread.side, ...(thread.start ? { start: thread.start } : {}), line: threadLine(thread) }
@@ -2372,7 +2377,7 @@ document.addEventListener('click', event => {
   const t = event.target
   const readEl = t.closest('[data-read-key]')
   if (readEl && !t.closest('[data-act="toggle-read"]')) markReadKey(readEl.dataset.readKey)
-  if (t.closest('td.ln[data-line]')) return
+  if (t.closest('td.ln[data-line]') || t.closest('a.badge.gh')) return
   if (picker && !t.closest('#picker') && !t.closest('[data-act="reviewers"]')) closePicker()
   const person = t.closest('#picker [data-person]')
   if (person && picker?.data) {

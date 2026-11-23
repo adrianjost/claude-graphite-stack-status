@@ -1618,6 +1618,14 @@ td.ln[data-line]:has(+ td.code:hover) {
   border-color: color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
+a.badge.gh {
+  text-decoration: none;
+}
+
+a.badge.gh:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
 .comment.gh .comment-head .avatar {
   width: 20px;
   height: 20px;
