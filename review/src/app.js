@@ -1035,6 +1035,14 @@ const cleanHtml = html =>
 let descriptionHtml = null
 let descriptionOpen = false
 
+// the commit text, with what differs from the PR marked: added words highlighted, removed ones struck through
+const changedHtml = (online, local) =>
+  diffWordsWithSpace(online, local)
+    .map(part =>
+      !part.value.trim() ? (part.removed ? '' : esc(part.value)) : part.added ? `<ins>${esc(part.value)}</ins>` : part.removed ? `<del>${esc(part.value)}</del>` : esc(part.value),
+    )
+    .join('')
+
 function renderDescription() {
   const section = $('#description')
   const pr = selectedRow()?.pr
@@ -1058,8 +1066,8 @@ function renderDescription() {
     if (compare) {
       target.innerHTML = `<p class="draft-note">The PR description differs from the commit message.</p><div class="description-compare">
         <div><div class="compare-head">PR description</div><div class="commit-title">${esc(pr.title)}</div>${body ? cleanHtml(body) : '<p class="muted">No description.</p>'}</div>
-        <div><div class="compare-head">Commit message</div><div class="commit-title">${esc(draft.title)}</div>${
-          draft.body ? `<div class="commit-body">${esc(draft.body)}</div>` : '<p class="muted">The commit message has no body.</p>'
+        <div><div class="compare-head">Commit message</div><div class="commit-title">${changedHtml(pr.title, draft.title)}</div>${
+          draft.body ? `<div class="commit-body">${changedHtml(norm(pr.body), norm(draft.body))}</div>` : '<p class="muted">The commit message has no body.</p>'
         }</div></div>`
     } else if (pr) {
       target.innerHTML = cleanHtml(body)

@@ -2146,6 +2146,11 @@ body.conversations-view #commits-section {
   min-width: 0;
 }
 
+.description-compare > div + div {
+  padding-left: 16px;
+  border-left: 1px solid var(--border);
+}
+
 .compare-head {
   margin-bottom: 6px;
   font-size: 12px;
@@ -2157,6 +2162,12 @@ body.conversations-view #commits-section {
 @media (max-width: 800px) {
   .description-compare {
     grid-template-columns: 1fr;
+  }
+
+  .description-compare > div + div {
+    padding: 12px 0 0;
+    border-left: 0;
+    border-top: 1px solid var(--border);
   }
 }
 
@@ -2174,4 +2185,16 @@ body.conversations-view #commits-section {
   content: '';
   flex: 1;
   border-top: 1px solid var(--border);
+}
+
+.description-compare ins {
+  text-decoration: none;
+  background: var(--add-word, color-mix(in srgb, var(--add) 25%, transparent));
+  border-radius: 3px;
+}
+
+.description-compare del {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--del) 15%, transparent);
+  border-radius: 3px;
 }

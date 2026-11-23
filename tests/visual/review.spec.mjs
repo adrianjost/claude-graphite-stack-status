@@ -80,13 +80,15 @@ test.describe('looks', () => {
   test('the PR description next to a differing commit message', async ({ page }) => {
     const state = stateOf('graphite')
     const row = state.rows.find(r => r.branch === 'adrian/parents-gate')
+    row.pr.title = '✨ Gate the whole parents chapter'
     row.pr.body = 'Gates the chapter until both parents agreed.'
     row.pr.bodyHtml = '<p>Gates the chapter until both parents agreed.</p>'
     server = await startServer(repos.stack)
     await api(server.base, '/state', state)
     await page.goto(`${server.base}/?t=${TOKEN}#branch=adrian/parents-gate`)
     await expect(page.locator('.description-compare')).toContainText('Gates the chapter until both parents agreed.')
-    await expect(page.locator('.description-compare')).toContainText('✨ Gate the parents chapter')
+    await expect(page.locator('.description-compare .commit-title').last()).toHaveText('✨ Gate the whole parents chapter')
+    await expect(page.locator('.description-compare del')).toHaveText('whole')
     await expect(page.locator('#description')).toHaveScreenshot('description-compare.png')
   })
 
