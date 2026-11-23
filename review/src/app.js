@@ -1,5 +1,5 @@
 import hljs from 'highlight.js/lib/common'
-import { diffWordsWithSpace } from 'diff'
+import { diffLines, diffWordsWithSpace } from 'diff'
 import DOMPurify from 'dompurify'
 
 const token = new URLSearchParams(location.search).get('t') ?? ''
@@ -81,6 +81,7 @@ const prefs = {
   compare: stored('compare', 'parent'),
   showSent: stored('showSent', true),
   showDismissed: stored('showDismissed', false),
+  compareMessage: stored('compareMessage', false),
   uncommitted: { true: 'all', false: 'committed' }[stored('uncommitted', 'all')] ?? stored('uncommitted', 'all'),
 }
 if (prefs.format !== 'unified' && prefs.format !== 'split') prefs.format = 'split'
@@ -1035,13 +1036,35 @@ const cleanHtml = html =>
 let descriptionHtml = null
 let descriptionOpen = false
 
-// the commit text, with what differs from the PR marked: added words highlighted, removed ones struck through
-const changedHtml = (online, local) =>
+// attribution lines differ by design between PR bodies and commits, so they never count as a difference
+const TRAILER = /^(?:🤖 Generated with .*|Co-Authored-By: .*)$/gim
+const comparable = text => (text ?? '').replace(/\r\n/g, '\n').replace(TRAILER, '').replace(/[ \t]+$/gm, '').trim()
+
+const wordsHtml = (online, local) =>
   diffWordsWithSpace(online, local)
-    .map(part =>
-      !part.value.trim() ? (part.removed ? '' : esc(part.value)) : part.added ? `<ins>${esc(part.value)}</ins>` : part.removed ? `<del>${esc(part.value)}</del>` : esc(part.value),
-    )
+    .map(part => (part.removed ? (part.value.trim() ? `<del>${esc(part.value)}</del>` : '') : part.added && part.value.trim() ? `<ins>${esc(part.value)}</ins>` : esc(part.value)))
     .join('')
+
+// the commit text line by line: similar lines show their changed words, other lines are marked whole
+function changedHtml(online, local) {
+  let html = ''
+  let dels = []
+  const lines = value => value.replace(/\n$/, '').split('\n').map(text => ({ text }))
+  for (const part of diffLines(online, local)) {
+    if (part.removed) {
+      dels = lines(part.value)
+      continue
+    }
+    if (part.added) {
+      for (const [del, add] of alignRun(dels, lines(part.value)))
+        html += del && add ? `${wordsHtml(del.text, add.text)}\n` : del ? `<del class="line">${esc(del.text)}</del>\n` : `<ins class="line">${esc(add.text)}</ins>\n`
+    } else {
+      html += dels.map(del => `<del class="line">${esc(del.text)}</del>\n`).join('') + esc(part.value)
+    }
+    dels = []
+  }
+  return html + dels.map(del => `<del class="line">${esc(del.text)}</del>\n`).join('')
+}
 
 function renderDescription() {
   const section = $('#description')
@@ -1050,8 +1073,11 @@ function renderDescription() {
   const body = pr ? (pr.bodyHtml?.trim() ?? '') : draftBody
   const showDraft = !pr && !!current?.draft
   const draft = current?.branch === selected ? current?.draft : undefined
-  const norm = text => (text ?? '').replace(/\r\n/g, '\n').trim()
-  const compare = pr?.body !== undefined && !!draft && (norm(pr.title) !== norm(draft.title) || norm(pr.body) !== norm(draft.body))
+  const differs = pr?.body !== undefined && !!draft && (comparable(pr.title) !== comparable(draft.title) || comparable(pr.body) !== comparable(draft.body))
+  const compare = differs && prefs.compareMessage
+  const compareToggle = section.querySelector('[data-act="compare-message"]')
+  compareToggle.hidden = !differs
+  compareToggle.textContent = compare ? 'Hide commit message' : 'Compare with commit message'
   section.hidden = !body && !showDraft && !compare
   section.classList.toggle('draft', !pr)
   section.classList.toggle('compare', compare)
@@ -1066,8 +1092,8 @@ function renderDescription() {
     if (compare) {
       target.innerHTML = `<p class="draft-note">The PR description differs from the commit message.</p><div class="description-compare">
         <div><div class="compare-head">PR description</div><div class="commit-title">${esc(pr.title)}</div>${body ? cleanHtml(body) : '<p class="muted">No description.</p>'}</div>
-        <div><div class="compare-head">Commit message</div><div class="commit-title">${changedHtml(pr.title, draft.title)}</div>${
-          draft.body ? `<div class="commit-body">${changedHtml(norm(pr.body), norm(draft.body))}</div>` : '<p class="muted">The commit message has no body.</p>'
+        <div><div class="compare-head">Commit message</div><div class="commit-title">${wordsHtml(pr.title, draft.title)}</div>${
+          draft.body ? `<div class="commit-body">${changedHtml(comparable(pr.body), comparable(draft.body))}</div>` : '<p class="muted">The commit message has no body.</p>'
         }</div></div>`
     } else if (pr) {
       target.innerHTML = cleanHtml(body)
@@ -2583,6 +2609,11 @@ document.addEventListener('click', event => {
     saveDraft()
   }
   if (d.describeEdit !== undefined) openDescribe('', Number(d.describeEdit))
+  if (d.act === 'compare-message') {
+    prefs.compareMessage = !prefs.compareMessage
+    store('compareMessage', prefs.compareMessage)
+    renderDescription()
+  }
   if (d.act === 'toggle-description') {
     descriptionOpen = !descriptionOpen
     renderDescription()

@@ -81,15 +81,19 @@ test.describe('looks', () => {
     const state = stateOf('graphite')
     const row = state.rows.find(r => r.branch === 'adrian/parents-gate')
     row.pr.title = '✨ Gate the whole parents chapter'
-    row.pr.body = 'Gates the chapter until both parents agreed.'
+    row.pr.body = 'Gates the chapter until both parents agreed.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)'
     row.pr.bodyHtml = '<p>Gates the chapter until both parents agreed.</p>'
     server = await startServer(repos.stack)
     await api(server.base, '/state', state)
     await page.goto(`${server.base}/?t=${TOKEN}#branch=adrian/parents-gate`)
+    await expect(page.locator('.description-compare')).toHaveCount(0)
+    await page.getByRole('button', { name: 'Compare with commit message' }).click()
     await expect(page.locator('.description-compare')).toContainText('Gates the chapter until both parents agreed.')
     await expect(page.locator('.description-compare .commit-title').last()).toHaveText('✨ Gate the whole parents chapter')
     await expect(page.locator('.description-compare del')).toHaveText('whole')
     await expect(page.locator('#description')).toHaveScreenshot('description-compare.png')
+    await page.getByRole('button', { name: 'Hide commit message' }).click()
+    await expect(page.locator('.description-compare')).toHaveCount(0)
   })
 
   test('browsing single commits', async ({ page }) => {
