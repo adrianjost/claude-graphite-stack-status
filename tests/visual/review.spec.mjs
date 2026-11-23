@@ -221,6 +221,8 @@ test.describe('conversations', () => {
     await expect(page.locator('[data-filter="unread"] .count')).toHaveText('1')
     await expect(page.locator('[data-filter="waiting"] .count')).toHaveText('1')
     await expect(cards.nth(0)).toHaveClass(/unread/)
+    // unread first, then a divider before the read ones
+    await expect(page.locator('#conversations .conversation.unread + .read-divider + .conversation')).toHaveCount(1)
     await expect(cards.nth(0).locator('tr.commented')).toHaveCount(2)
     await expect(cards.nth(0).locator('.conversation-code tr')).toHaveCount(6)
     await expect(cards.nth(2)).toContainText('Changed since you commented')

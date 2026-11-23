@@ -2391,3 +2391,19 @@ body.conversations-view #commits-section {
     grid-template-columns: 1fr;
   }
 }
+
+.read-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 16px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.read-divider::before,
+.read-divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--border);
+}

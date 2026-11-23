@@ -2110,9 +2110,13 @@ function renderConversations() {
   conversationJumps = []
   const chains = conversationChains()
   const counts = { all: chains.length, unread: chains.filter(c => c.some(isUnread)).length, waiting: chains.filter(isWaiting).length }
-  const shownChains = chains.filter(chain =>
+  const filtered = chains.filter(chain =>
     conversationFilter === 'unread' ? chain.some(isUnread) : conversationFilter === 'waiting' ? isWaiting(chain) : true,
   )
+  // All: unread first, each part by latest activity, with a divider before the read ones
+  const unreadFirst = conversationFilter === 'all' && filtered.some(c => c.some(isUnread))
+  const shownChains = unreadFirst ? [...filtered.filter(c => c.some(isUnread)), ...filtered.filter(c => !c.some(isUnread))] : filtered
+  const divideAt = unreadFirst ? shownChains.findIndex(c => !c.some(isUnread)) : -1
   const filter = (key, label) =>
     `<button data-act="conversation-filter" data-filter="${key}" aria-pressed="${conversationFilter === key}">${label} <span class="count">${counts[key]}</span></button>`
   const focused = document.activeElement?.dataset?.replyKey
@@ -2125,7 +2129,7 @@ function renderConversations() {
       ${shownChains.length ? `<button class="btn" data-act="fold-all" data-fold="${shownChains.every(c => isFolded(c, chainKey(c))) ? 0 : 1}">${shownChains.every(c => isFolded(c, chainKey(c))) ? 'Expand all' : 'Collapse all'}</button>` : ''}
     </div>
     ${
-      shownChains.map(chain => conversationCard(chain, chainKey(chain))).join('') ||
+      shownChains.map((chain, i) => (i && i === divideAt ? '<div class="read-divider"><span>Read</span></div>' : '') + conversationCard(chain, chainKey(chain))).join('') ||
       `<div class="empty-state">${
         chains.length ? 'Nothing here with this filter.' : 'Comments you send to Claude show up here with Claude’s answers, latest activity first.'
       }</div>`
