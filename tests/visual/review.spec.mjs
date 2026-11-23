@@ -159,6 +159,143 @@ test.describe('buttons that ask Claude', () => {
   })
 })
 
+test.describe('conversations', () => {
+  // Three sent comments over two layers: one with an unread reply, one addressed and read, one still waiting.
+  async function seed(page) {
+    await open(page)
+    const file = await page.evaluate(async t => (await fetch(`/file?t=${t}&branch=adrian%2Fparents-gate&path=src%2Ffeature.ts&worktree=1`)).json(), TOKEN)
+    const lines = (file.text ?? '').split('\n')
+    const at = Date.parse('2026-01-01T02:00:00Z')
+    await page.evaluate(
+      ({ code, at }) => {
+        localStorage.setItem('sent:adrian/parents-gate', JSON.stringify([
+          { id: 1, path: 'src/feature.ts', side: 'new', start: 2, line: 3, code, text: 'Why these numbers?', sentAt: at, answeredAt: at + 180_000, answer: { ref: 'c1', status: 'reply', text: 'Product asked for ten times the old values.' } },
+          { id: 2, path: 'src/gate.ts', side: 'new', line: 1, code: 'export const isOpen = (age: number) => age >= 18', text: 'Use a named constant for the age', sentAt: at + 60_000, answer: { ref: 'c2', status: 'fixed' }, readSig: 'fixed||' },
+        ]))
+        localStorage.setItem('sent:adrian/shared-story-intro', JSON.stringify([
+          { id: 3, path: 'src/intro.ts', side: 'new', line: 2, code: '  return `Hello ${name}`', text: 'Greet by first name?', sentAt: at + 120_000 },
+        ]))
+      },
+      { code: lines.slice(1, 3).join('\n'), at },
+    )
+    await page.reload()
+    await expect(page.locator('#diff section.file').first()).toBeVisible()
+  }
+
+  test('lists every sent comment of the stack, latest activity first, with answers, code and read state', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await seed(page)
+    await expect(page.locator('[data-view="conversations"] .count')).toHaveText('1')
+    await page.locator('[data-view="conversations"]').click()
+    const cards = page.locator('#conversations .conversation')
+    await expect(cards).toHaveCount(3)
+    // Claude's answer on the oldest comment moved it to the top
+    await expect(cards.locator('code')).toHaveText(['src/feature.ts:2–3', 'src/intro.ts:2', 'src/gate.ts:1'])
+    await expect(page.locator('[data-filter="unread"] .count')).toHaveText('1')
+    await expect(page.locator('[data-filter="waiting"] .count')).toHaveText('1')
+    await expect(cards.nth(0)).toHaveClass(/unread/)
+    await expect(cards.nth(0).locator('tr.commented')).toHaveCount(2)
+    await expect(cards.nth(0).locator('.conversation-code tr')).toHaveCount(6)
+    await expect(cards.nth(2)).toContainText('Changed since you commented')
+    await expect(cards.nth(1)).toContainText('Waiting for Claude')
+    // seen for a moment, the unread one counts as read but stays marked until the view is drawn again
+    await expect(page.locator('[data-filter="unread"] .count')).toHaveText('0')
+    await expect(cards.nth(0)).toHaveClass(/unread/)
+    await expect(cards.nth(0).locator('[data-act="toggle-read"]')).toHaveText('Mark as unread')
+    await expect(cards.nth(1).locator('.conversation-code tr')).toHaveCount(3)
+    await expect(page).toHaveScreenshot('conversations.png', { fullPage: true })
+    await page.locator('[data-filter="waiting"]').click()
+    await expect(cards).toHaveCount(1)
+
+    await cards.locator('[data-jump]').click()
+    await expect(page.locator('#conversations')).toBeHidden()
+    await expect(page).toHaveURL(/#branch=adrian%2Fshared-story-intro$/)
+  })
+
+  test('a reply sent from a card goes to Claude as a follow-up on its layer', async ({ page }) => {
+    await seed(page)
+    await page.locator('[data-view="conversations"]').click()
+    const card = page.locator('#conversations .conversation').first()
+    await card.locator('textarea').fill('Then add a comment saying so')
+    await card.locator('textarea').press('ControlOrMeta+Enter')
+    await expect.poll(actions).toEqual([
+      expect.objectContaining({
+        type: 'review',
+        branch: 'adrian/parents-gate',
+        comments: [expect.objectContaining({ replyTo: 1, parentRef: 'c1', text: 'Then add a comment saying so', path: 'src/feature.ts' })],
+      }),
+    ])
+    // the plugin picks it up
+    await api(server.base, '/actions', { ids: (await actions()).map(a => a.id) })
+    await expect(page.locator('#conversations .conversation').first().locator('.msg')).toHaveCount(2)
+    await expect(page.locator('#conversations .conversation').first()).toContainText('Waiting for Claude')
+  })
+
+  test('an answer read in the diff view counts as read', async ({ page }) => {
+    await seed(page)
+    await expect(page.locator('[data-view="conversations"] .count')).toHaveText('1')
+    const thread = page.locator('#diff .comment.thread.unread')
+    await thread.scrollIntoViewIfNeeded()
+    await expect(page.locator('[data-view="conversations"] .count')).toHaveCount(0)
+  })
+
+  test('conversations fold by hand, stay folded after a reload and open again on news', async ({ page }) => {
+    await seed(page)
+    await page.locator('[data-view="conversations"]').click()
+    const cards = page.locator('#conversations .conversation')
+    await cards.nth(1).locator('.conversation-head code').click()
+    await expect(cards.nth(1)).toHaveClass(/folded/)
+    await expect(cards.nth(1).locator('.msg')).toBeHidden()
+    await page.reload()
+    await page.locator('[data-view="conversations"]').click()
+    await expect(cards.nth(1)).toHaveClass(/folded/)
+    await page.locator('[data-act="fold-all"]').click()
+    await expect(page.locator('#conversations .conversation.folded')).toHaveCount(3)
+    await expect(page.locator('[data-act="fold-all"]')).toHaveText('Expand all')
+    await page.locator('[data-act="fold-all"]').click()
+    await expect(page.locator('#conversations .conversation.folded')).toHaveCount(0)
+
+    // Claude answering a folded conversation opens it again
+    await cards.nth(1).locator('[data-act="fold-conversation"]').first().click()
+    await expect(cards.nth(1)).toHaveClass(/folded/)
+    const state = stateOf('graphite')
+    await api(server.base, '/state', { ...state, replies: { 3: { ref: 'c3', status: 'reply', text: 'Yes, first name only.' } } })
+    await expect(page.locator('#conversations .conversation').first()).toContainText('Yes, first name only.')
+    await expect(page.locator('#conversations .conversation').first()).not.toHaveClass(/folded/)
+  })
+
+  test('mark as read and unread by hand', async ({ page }) => {
+    await seed(page)
+    await page.locator('[data-view="conversations"]').click()
+    const first = page.locator('#conversations .conversation').first()
+    await first.locator('[data-act="toggle-read"]').click()
+    await expect(first).not.toHaveClass(/unread/)
+    await expect(first.locator('[data-act="toggle-read"]')).toHaveText('Mark as unread')
+    await first.locator('[data-act="toggle-read"]').click()
+    await expect(page.locator('#conversations .conversation').first()).toHaveClass(/unread/)
+  })
+})
+
+test.describe('reviewer picker', () => {
+  test('people seen before show right away, before GitHub answers', async ({ page }) => {
+    server = await startServer(repos.stack)
+    const state = stateOf('graphite')
+    state.people = [
+      { login: 'carla', name: 'Carla Example', avatarUrl: '' },
+      { login: 'finn', name: 'Finn Example', avatarUrl: '' },
+    ]
+    await api(server.base, '/state', state)
+    await page.goto(`${server.base}/?t=${TOKEN}#branch=adrian%2Fparents-gate`)
+    await page.locator('[data-act="reviewers"]').first().click()
+    await page.locator('#picker input').fill('car')
+    const carla = page.locator('#picker [data-person="carla"]')
+    await expect(carla).toBeVisible()
+    await expect(page.locator('#picker [data-person="finn"]')).toHaveCount(0)
+    await carla.click()
+    await expect(carla).toHaveClass(/selected/)
+  })
+})
+
 test.describe('reviewing', () => {
   test('a line comment goes into one review sent to Claude', async ({ page }) => {
     await open(page)

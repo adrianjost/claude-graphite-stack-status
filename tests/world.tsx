@@ -218,11 +218,13 @@ export type Recorder = {
   // actions the review page sends, handed to the plugin on its next poll
   pageActions: Record<string, unknown>[]
   actionResults: Record<string, unknown>
+  // calls to the desktop app's tools ($.mcp.call), e.g. ccd_pr bind_pr
+  mcp: { server: string; tool: string; args: Record<string, unknown> }[]
 }
 
 // Wires the fake world beneath the plugin. Returns a recorder of every call.
 export function useWorld(on: On, world: () => World, options: { review?: boolean; release?: string; sleep?: (ms: number) => Promise<void> } = {}): Recorder {
-  const rec: Recorder = { calls: [], unknown: [], graphql: 0, reviewStates: [], pageActions: [], actionResults: {} }
+  const rec: Recorder = { calls: [], unknown: [], graphql: 0, reviewStates: [], pageActions: [], actionResults: {}, mcp: [] }
   let actionId = 0
   on('process.run', (_, e) => {
     const argv = [...e.argv]
@@ -265,7 +267,10 @@ export function useWorld(on: On, world: () => World, options: { review?: boolean
     }
     return { deny: `unexpected review call ${url.pathname}` }
   })
-  on('mcp.call', () => ({ value: { isError: true, content: [] } }))
+  on('mcp.call', (_, e) => {
+    rec.mcp.push({ server: e.server, tool: e.tool, args: e.args })
+    return { value: { isError: true, content: [] } }
+  })
   on('fs.read', (_, e) => (e.path.endsWith('plugin.json') ? { value: JSON.stringify({ version: '3.0.0' }) } : { deny: 'no files in tests' }))
   return rec
 }

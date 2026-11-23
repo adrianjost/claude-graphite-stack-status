@@ -457,11 +457,11 @@ const threadsOf = list => {
   const walk = c => [c, ...(kids.get(c.id) ?? []).flatMap(walk)]
   return roots.map(walk)
 }
-const refreshFollowUps = list => list.forEach(c => c.replyTo && Object.assign(c, followUpMeta(c.replyTo)))
+const refreshFollowUps = (list, pool = sent) => list.forEach(c => c.replyTo && Object.assign(c, followUpMeta(c.replyTo, pool)))
 const clip = text => (text.length > 100 ? `${text.slice(0, 100)}…` : text)
 
-function followUpMeta(parentId) {
-  const parent = sent.find(c => c.id === parentId)
+function followUpMeta(parentId, pool = sent) {
+  const parent = pool.find(c => c.id === parentId)
   return { parentRef: parent?.answer?.ref, context: parent ? clip((parent.answer?.text || parent.text).replace(/\s+/g, ' ')) : undefined }
 }
 
@@ -478,15 +478,17 @@ function sentThread(chain) {
   const draft = comments.find(c => c.replyTo === leaf.id)
   const box = composers.find(c => c.replyTo === leaf.id)
   const outdated = !isFile(root) && codeAt(root) !== (root.code ?? '')
+  const key = `${selected}|${root.id}`
+  const unread = chain.some(isUnread)
   const msgs = chain
     .map(
-      c => `<div class="msg"><div class="comment-head"><strong>You</strong>${refTag(c)}<span class="badge sent">Sent to Claude</span>${answerBadge(c)}${c === root && outdated ? '<span class="badge">Outdated</span>' : ''}${c === root && root.dismissedAt ? '<span class="badge">Dismissed</span>' : ''}<span>${esc(timeAgo(c.sentAt))}</span><span class="spacer"></span>${c === root ? dismissButton(c, chain.length > 1 ? 'Dismiss this conversation' : 'Dismiss') : ''}</div>
+      c => `<div class="msg"><div class="comment-head">${c === root && unread ? '<span class="unread-dot" title="New answer from Claude"></span>' : ''}<strong>You</strong>${refTag(c)}<span class="badge sent">Sent to Claude</span>${answerBadge(c)}${c === root && outdated ? '<span class="badge">Outdated</span>' : ''}${c === root && root.dismissedAt ? '<span class="badge">Dismissed</span>' : ''}<span>${esc(timeAgo(c.sentAt))}</span><span class="spacer"></span>${c === root ? readButton(key, unread) + dismissButton(c, chain.length > 1 ? 'Dismiss this conversation' : 'Dismiss') : ''}</div>
         <div class="comment-body">${bodyWithSuggestions(c)}</div>${answerBlock(c)}</div>`,
     )
     .join('')
   const pendingFollowUp = draft && !box ? pendingMsg(draft, comments.indexOf(draft)) : ''
   const field = draft || box || root.dismissedAt ? '' : `<div class="reply-field"><input readonly data-reply-field="${sent.indexOf(leaf)}" placeholder="Reply to Claude…"></div>`
-  return `<div class="${sentClass(root)} thread${chain.some(hasAnswer) || draft || box ? ' answered' : ''}">${msgs}${pendingFollowUp}${box ? composerBox(box) : field}</div>`
+  return `<div class="${sentClass(root)} thread${chain.some(hasAnswer) || draft || box ? ' answered' : ''}${unread ? ' unread' : ''}" data-read-key="${esc(key)}">${msgs}${pendingFollowUp}${box ? composerBox(box) : field}</div>`
 }
 
 function answerBadge(c) {
@@ -560,6 +562,7 @@ function applyReplies() {
       const next = c.id === undefined ? undefined : replies[String(c.id)]
       if (next && JSON.stringify(next) !== JSON.stringify(c.answer)) {
         c.answer = next
+        c.answeredAt = Date.now()
         dirty = true
       }
     }
@@ -1249,6 +1252,7 @@ function renderHeader() {
       <button class="btn" data-act="comments" title="All comments">Comments</button>
       <button class="btn primary" data-act="review">Review${pendingCount() ? ` <span class="count">${pendingCount()}</span>` : ''}</button>
     </div>`
+  renderViewTabs()
   paintLabels()
   document.documentElement.style.setProperty('--header-height', `${$('#header').offsetHeight}px`)
   updateIdentity()
@@ -1281,6 +1285,8 @@ function renderAll() {
   renderSidebar()
   renderDiff()
   renderCommentViews()
+  renderConversations()
+  watchUnread()
   window.scrollTo(0, scroll)
 }
 
@@ -1289,6 +1295,7 @@ function rerenderFile(path) {
   const card = cardOf(path)
   if (file && card) card.outerHTML = fileCard(file)
   else if (!file) renderDiff()
+  watchUnread()
 }
 
 /* data */
@@ -1512,19 +1519,20 @@ function saveComposer(composer) {
   saveDraft()
 }
 
-async function deliver(list) {
+async function deliver(list, branch = selected) {
+  const row = state.rows.find(r => r.branch === branch)
   ensureIds(list)
-  refreshFollowUps(list)
+  refreshFollowUps(list, sentOf(branch))
   const { id } = await api('/action', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       type: 'review',
-      branch: selected,
-      compareTo: current?.parent,
-      includesUncommitted: !!current?.includeWorktree,
+      branch,
+      compareTo: branch === selected ? current?.parent : row?.parent,
+      includesUncommitted: branch === selected && !!current?.includeWorktree,
       summary: '',
-      comments: list.map(c => ({ ...c, branch: selected })),
+      comments: list.map(c => ({ ...c, branch })),
     }),
   })
   const result = await waitForDelivery(id, 30)
@@ -1868,6 +1876,288 @@ function showTip(anchor, text) {
   }, 1400)
 }
 
+/* conversations */
+
+let view = 'diff'
+let conversationFilter = 'all'
+let renderToken = 0
+let conversationJumps = []
+const conversationDrafts = new Map()
+let foldedConversations = stored('conversations-folded', {})
+// folded until something new happens in it
+const isFolded = (chain, key) => (foldedConversations[key] ?? -1) >= lastActivity(chain)
+const answerSig = a => (a ? `${a.status ?? ''}|${a.text ?? ''}|${a.to ?? ''}` : '')
+const isUnread = c => hasAnswer(c) && c.readSig !== answerSig(c.answer)
+const isWaiting = chain => !hasAnswer(chain.at(-1)) && !chain[0].dismissedAt
+const chainKey = chain => `${chain[0].branch}|${chain[0].id}`
+const lastActivity = chain => Math.max(...chain.map(c => Math.max(c.sentAt ?? 0, c.answeredAt ?? 0)))
+const sentOf = branch => (branch === selected ? sent : stored(`sent:${branch}`, []))
+
+// newest activity first: a reply from Claude or a follow-up moves the conversation up
+function conversationChains() {
+  const all = collect('sent')
+  return stackRows()
+    .flatMap(row => threadsOf(all.filter(c => c.branch === row.branch)))
+    .filter(chain => shown(chain[0]))
+    .sort((a, b) => lastActivity(b) - lastActivity(a))
+}
+
+const findChain = key => conversationChains().find(chain => chainKey(chain) === key)
+const unreadCount = () => conversationChains().filter(chain => chain.some(isUnread)).length
+
+function renderViewTabs() {
+  const unread = unreadCount()
+  $('#view-tabs').innerHTML = `<button data-act="view" data-view="diff" aria-pressed="${view === 'diff'}">Diff</button><button data-act="view" data-view="conversations" aria-pressed="${view === 'conversations'}" title="Every comment you sent to Claude on this stack, with its answers">Conversations${unread ? ` <span class="count unread">${unread}</span>` : ''}</button>`
+}
+
+function setView(next) {
+  if (view === next) return
+  view = next
+  document.body.classList.toggle('conversations-view', view === 'conversations')
+  $('#conversations').hidden = view !== 'conversations'
+  if (view === 'conversations') renderConversations()
+  renderHeader()
+  renderViewTabs()
+  window.scrollTo(0, 0)
+}
+
+function markRead(chain, read = true) {
+  const branch = chain[0].branch
+  const ids = new Set(chain.map(c => c.id))
+  const list = sentOf(branch)
+  for (const c of list) if (ids.has(c.id)) c.readSig = read ? answerSig(c.answer) : undefined
+  store(`sent:${branch}`, list)
+}
+
+function readButton(key, unread, always) {
+  if (!unread && !always) return ''
+  return `<button class="btn invisible" data-act="toggle-read" data-key="${esc(key)}" data-read="${unread ? 1 : 0}">${unread ? 'Mark as read' : 'Mark as unread'}</button>`
+}
+
+// what is on screen for a moment, clicked, focused or replied to counts as read; it keeps its marking until drawn again
+function markReadKey(key) {
+  const chain = findChain(key)
+  if (!chain?.some(isUnread)) return
+  markRead(chain)
+  for (const el of document.querySelectorAll(`[data-read-key="${CSS.escape(key)}"] [data-act="toggle-read"]`)) {
+    if (el.closest('.conversation')) Object.assign(el, { textContent: 'Mark as unread' }).dataset.read = '0'
+    else el.remove()
+  }
+  const left = unreadCount()
+  const count = document.querySelector('[data-filter="unread"] .count')
+  if (count) count.textContent = String(left)
+  if (!left) document.querySelector('[data-act="read-all"]')?.remove()
+  renderViewTabs()
+}
+
+let readObserver
+const readVisible = new Map()
+const readTimers = new Map()
+
+function watchUnread() {
+  readObserver ??= new IntersectionObserver(
+    entries => {
+      for (const entry of entries) {
+        const key = entry.target.dataset.readKey
+        const seen = entry.isIntersecting && (entry.intersectionRatio >= 0.6 || entry.intersectionRect.height >= window.innerHeight * 0.4)
+        readVisible.set(key, seen)
+        if (!seen || readTimers.has(key)) continue
+        readTimers.set(
+          key,
+          setTimeout(() => {
+            readTimers.delete(key)
+            if (readVisible.get(key)) markReadKey(key)
+          }, 1500),
+        )
+      }
+    },
+    { threshold: [0, 0.3, 0.6, 1] },
+  )
+  readObserver.disconnect()
+  document.querySelectorAll('[data-read-key].unread').forEach(el => readObserver.observe(el))
+}
+
+function locationLabel(c) {
+  if (c.kind === 'description') return 'PR description'
+  if (isFile(c) || c.file) return `${c.path} (file)`
+  return `${c.path}:${c.start && c.start !== c.line ? `${c.start}–${c.line}` : c.line}`
+}
+
+function conversationCard(chain, key) {
+  const root = chain[0]
+  const leaf = chain.at(-1)
+  const row = state.rows.find(r => r.branch === root.branch)
+  const layer = row?.pr ? `#${row.pr.number} ${row.pr.title}` : root.branch
+  const unread = chain.some(isUnread)
+  conversationJumps.push(root)
+  const status = isWaiting(chain) ? '<span class="badge pending">Waiting for Claude</span>' : answerBadge(leaf)
+  const msgs = chain
+    .map(c => {
+      const a = c.answer
+      const reply = a?.text
+        ? `<div class="claude-reply${isUnread(c) ? ' new' : ''}"><strong>Claude</strong><div>${esc(a.text)}</div></div>`
+        : a?.status === 'fixed'
+          ? `<div class="claude-reply${isUnread(c) ? ' new' : ''}"><strong>Claude</strong><div class="muted">Addressed it without a reply.</div></div>`
+          : ''
+      return `<div class="msg"><div class="comment-head"><strong>You</strong>${refTag(c)}<span>${esc(timeAgo(c.sentAt))}</span></div>
+        <div class="comment-body">${bodyWithSuggestions(c)}</div>${reply}</div>`
+    })
+    .join('')
+  const reply = root.dismissedAt
+    ? ''
+    : `<div class="conversation-reply"><textarea data-reply-key="${esc(key)}" rows="1" placeholder="Reply to Claude…">${esc(conversationDrafts.get(key) ?? '')}</textarea>
+        <button class="btn" data-act="conversation-reply" data-key="${esc(key)}" title="⌘↵">Send to Claude</button></div>`
+  const folded = isFolded(chain, key)
+  return `<article class="conversation${unread ? ' unread' : ''}${folded ? ' folded' : ''}" data-read-key="${esc(key)}">
+    <div class="conversation-head" data-act="fold-conversation" data-key="${esc(key)}">
+      <button class="btn icon invisible" data-act="fold-conversation" data-key="${esc(key)}" title="${folded ? 'Expand' : 'Collapse'}">${ICONS.chevron}</button>
+      ${unread ? '<span class="unread-dot" title="New answer from Claude"></span>' : ''}
+      <span class="layer" title="${esc(root.branch)}">${esc(layer)}</span>
+      <code>${esc(locationLabel(root))}</code>
+      ${status}${root.dismissedAt ? '<span class="badge">Dismissed</span>' : ''}
+      <span class="spacer"></span>
+      ${chain.some(hasAnswer) ? readButton(key, unread, true) : ''}
+      <button class="btn" data-jump="c${conversationJumps.length - 1}">Open in diff</button>
+    </div>
+    <div class="conversation-code" data-context="${esc(key)}"></div>
+    ${msgs}${reply}
+  </article>`
+}
+
+async function contextHtml(c, fileText) {
+  if (c.kind === 'description') return c.quote ? `<blockquote>${esc(c.quote)}</blockquote>` : ''
+  if (isFile(c) || c.file || !c.code) return ''
+  const start = c.start ?? c.line
+  const end = c.line
+  let first = start
+  let lines = c.code.split('\n')
+  let note = ''
+  if (c.side === 'new') {
+    const text = await fileText(c.branch, c.path)
+    const all = text?.replace(/\n$/, '').split('\n')
+    if (all && all.slice(start - 1, end).join('\n') === c.code) {
+      first = Math.max(1, start - 3)
+      lines = all.slice(first - 1, Math.min(all.length, end + 3))
+    } else if (all) note = '<div class="context-note">Changed since you commented: this is the code you commented on.</div>'
+  }
+  const language = LANGUAGES[c.path.split('.').pop()?.toLowerCase() ?? '']
+  const rows = highlight(lines, language)
+    .map((html, i) => {
+      const n = first + i
+      return `<tr class="${n >= start && n <= end ? 'commented' : ''}"><td class="ln">${n}</td><td class="code">${html || ' '}</td></tr>`
+    })
+    .join('')
+  return `${note}<table class="diff unified"><colgroup><col class="num"><col></colgroup><tbody>${rows}</tbody></table>`
+}
+
+function renderConversations() {
+  if (view !== 'conversations') return
+  conversationJumps = []
+  const chains = conversationChains()
+  const counts = { all: chains.length, unread: chains.filter(c => c.some(isUnread)).length, waiting: chains.filter(isWaiting).length }
+  const shownChains = chains.filter(chain =>
+    conversationFilter === 'unread' ? chain.some(isUnread) : conversationFilter === 'waiting' ? isWaiting(chain) : true,
+  )
+  const filter = (key, label) =>
+    `<button data-act="conversation-filter" data-filter="${key}" aria-pressed="${conversationFilter === key}">${label} <span class="count">${counts[key]}</span></button>`
+  const focused = document.activeElement?.dataset?.replyKey
+  const caret = focused ? document.activeElement.selectionStart : 0
+  $('#conversations').innerHTML = `<div class="conversations-bar">
+      <strong>Conversations</strong>
+      <span class="segmented">${filter('all', 'All')}${filter('unread', 'Unread')}${filter('waiting', 'Waiting for Claude')}</span>
+      <span class="spacer"></span>
+      ${counts.unread ? '<button class="btn invisible" data-act="read-all">Mark all as read</button>' : ''}
+      ${shownChains.length ? `<button class="btn" data-act="fold-all" data-fold="${shownChains.every(c => isFolded(c, chainKey(c))) ? 0 : 1}">${shownChains.every(c => isFolded(c, chainKey(c))) ? 'Expand all' : 'Collapse all'}</button>` : ''}
+    </div>
+    ${
+      shownChains.map(chain => conversationCard(chain, chainKey(chain))).join('') ||
+      `<div class="empty-state">${
+        chains.length ? 'Nothing here with this filter.' : 'Comments you send to Claude show up here with Claude’s answers, latest activity first.'
+      }</div>`
+    }`
+  if (focused) {
+    const area = document.querySelector(`textarea[data-reply-key="${CSS.escape(focused)}"]`)
+    area?.focus()
+    area?.setSelectionRange(caret, caret)
+  }
+  const token = ++renderToken
+  const texts = new Map()
+  const fileText = (branch, path) => {
+    const key = `${branch}|${path}`
+    if (!texts.has(key)) {
+      const row = state.rows.find(r => r.branch === branch)
+      const params = new URLSearchParams({ branch, path, worktree: row?.isCurrent ? '1' : '0' })
+      texts.set(key, api(`/file?${params}`).then(r => r.text).catch(() => undefined))
+    }
+    return texts.get(key)
+  }
+  for (const chain of shownChains) {
+    contextHtml(chain[0], fileText).then(html => {
+      const box = token === renderToken && document.querySelector(`[data-context="${CSS.escape(chainKey(chain))}"]`)
+      if (box) box.innerHTML = html
+    })
+  }
+  watchUnread()
+}
+
+function foldConversations(chains, fold) {
+  for (const chain of chains) {
+    if (fold) foldedConversations[chainKey(chain)] = lastActivity(chain)
+    else delete foldedConversations[chainKey(chain)]
+  }
+  store('conversations-folded', Object.keys(foldedConversations).length ? foldedConversations : undefined)
+  renderConversations()
+}
+
+function toggleRead(key, read) {
+  const chain = findChain(key)
+  if (!chain) return
+  markRead(chain, read)
+  renderAll()
+}
+
+function readAll() {
+  for (const chain of conversationChains()) if (chain.some(isUnread)) markRead(chain)
+  renderAll()
+}
+
+async function replyFromConversation(key, button) {
+  const chain = findChain(key)
+  const area = document.querySelector(`textarea[data-reply-key="${CSS.escape(key)}"]`)
+  const text = area?.value.trim() ?? ''
+  if (!chain || !text) {
+    area?.focus()
+    return
+  }
+  const branch = chain[0].branch
+  const parent = chain.at(-1)
+  const comment = {
+    path: parent.path,
+    ...(parent.kind ? { kind: parent.kind } : {}),
+    side: parent.side,
+    ...(parent.start ? { start: parent.start } : {}),
+    line: parent.line,
+    text,
+    replyTo: parent.id,
+  }
+  button.disabled = true
+  button.textContent = 'Sending…'
+  const result = await deliver([comment], branch).catch(() => null)
+  if (!result) {
+    button.disabled = false
+    button.textContent = 'Retry sending'
+    showTip(button, "Claude Code isn't reachable: your reply is kept")
+    return
+  }
+  const next = [...sentOf(branch), { ...comment, sentAt: Date.now() }]
+  if (branch === selected) sent = next
+  store(`sent:${branch}`, next)
+  markRead(chain)
+  conversationDrafts.delete(key)
+  renderAll()
+  showTip(document.querySelector(`[data-read-key="${CSS.escape(key)}"]`) ?? button, result.data?.queued ? 'Queued for Claude ✓' : 'Sent to Claude ✓')
+}
+
 /* reviewer picker */
 
 let picker = null
@@ -1936,20 +2226,33 @@ async function openPicker(button) {
   box.hidden = false
   box.style.setProperty('--top', `${rect.bottom + 6}px`)
   box.style.setProperty('--left', `${Math.max(8, Math.min(rect.left, window.innerWidth - 380))}px`)
-  picker = { number: Number(button.dataset.number), query: '', selected: new Set(), initial: new Set(), extra: [], data: null }
+  const number = Number(button.dataset.number)
+  const pr = state.rows.find(r => r.pr?.number === number)?.pr
+  const requested = new Set((pr?.reviewers ?? []).filter(r => r.state === 'REQUESTED').map(r => r.name))
+  const cached = state.people ?? []
+  // shows the people seen before right away; GitHub's answer replaces them
+  const data = cached.length ? { suggestions: [], requested: cached.filter(p => requested.has(p.login)), reviewed: [], users: cached } : null
+  picker = { number, query: '', selected: new Set(requested), initial: requested, extra: [], data }
   box.querySelector('input').value = ''
   box.querySelector('input').focus()
   renderPicker()
-  const result = await runAction({ type: 'reviewers-load', number: picker.number }).catch(() => null)
-  if (!picker) return
+  const result = await runAction({ type: 'reviewers-load', number }).catch(() => null)
+  if (picker?.number !== number) return
   if (!result?.ok) {
-    picker.error = result?.message ?? 'Claude Code did not answer.'
+    if (!picker.data) picker.error = result?.message ?? 'Claude Code did not answer.'
   } else {
+    const added = [...picker.selected].filter(l => !picker.initial.has(l))
+    const removed = new Set([...picker.initial].filter(l => !picker.selected.has(l)))
     picker.data = result.data
     picker.initial = new Set(result.data.requested.map(p => p.login))
-    picker.selected = new Set(picker.initial)
+    picker.selected = new Set([...picker.initial, ...added].filter(l => !removed.has(l)))
+    remember([...result.data.suggestions, ...result.data.requested, ...result.data.users])
   }
   renderPicker()
+}
+
+function remember(people) {
+  state.people = [...people, ...(state.people ?? [])].filter((p, i, list) => p?.login && list.findIndex(o => o.login === p.login) === i)
 }
 
 let searchTimer
@@ -1965,7 +2268,10 @@ function searchPicker(query) {
     const result = await runAction({ type: 'reviewers-load', number: picker.number, query }).catch(() => null)
     if (!picker) return
     picker.searching = false
-    if (result?.ok) picker.extra = [...picker.extra, ...result.data.users]
+    if (result?.ok) {
+      picker.extra = [...picker.extra, ...result.data.users]
+      remember(result.data.users)
+    }
     renderPicker()
   }, 350)
 }
@@ -2005,6 +2311,8 @@ async function closePicker() {
 
 document.addEventListener('click', event => {
   const t = event.target
+  const readEl = t.closest('[data-read-key]')
+  if (readEl && !t.closest('[data-act="toggle-read"]')) markReadKey(readEl.dataset.readKey)
   if (t.closest('td.ln[data-line]')) return
   if (picker && !t.closest('#picker') && !t.closest('[data-act="reviewers"]')) closePicker()
   const person = t.closest('#picker [data-person]')
@@ -2040,7 +2348,10 @@ document.addEventListener('click', event => {
   const d = el.dataset
   if (d.threadAct) return threadAct(el)
   if (d.changes) return toggleChanges(d.changes)
-  if (d.branch !== undefined && !el.classList.contains('trunk')) select(d.branch)
+  if (d.branch !== undefined && !el.classList.contains('trunk')) {
+    setView('diff')
+    select(d.branch)
+  }
   if (d.nav) navigate(Number(d.nav))
   if (d.format) setPref('format', d.format)
   if (d.compare) setPref('compare', d.compare)
@@ -2144,8 +2455,9 @@ document.addEventListener('click', event => {
     return
   }
   if (d.jump) {
-    const target = jumps[Number(d.jump)]
+    const target = d.jump.startsWith('c') ? conversationJumps[Number(d.jump.slice(1))] : jumps[Number(d.jump)]
     $('#submit').hidden = true
+    setView('diff')
     if (target) jumpTo(target)
   }
   if (d.act === 'comments') {
@@ -2153,6 +2465,27 @@ document.addEventListener('click', event => {
     $('#comments-panel').hidden = !$('#comments-panel').hidden
   }
   if (d.act === 'close-comments') $('#comments-panel').hidden = true
+  if (d.act === 'view') {
+    $('#comments-panel').hidden = true
+    setView(d.view)
+  }
+  if (d.act === 'conversation-filter') {
+    conversationFilter = d.filter
+    renderConversations()
+  }
+  if (d.act === 'read-all') readAll()
+  if (d.act === 'toggle-read') toggleRead(d.key, d.read === '1')
+  if (d.act === 'conversation-reply') replyFromConversation(d.key, el)
+  if (d.act === 'fold-conversation') {
+    const chain = findChain(d.key)
+    if (chain) foldConversations([chain], !isFolded(chain, d.key))
+  }
+  if (d.act === 'fold-all') {
+    const chains = conversationChains().filter(chain =>
+      conversationFilter === 'unread' ? chain.some(isUnread) : conversationFilter === 'waiting' ? isWaiting(chain) : true,
+    )
+    foldConversations(chains, d.fold === '1')
+  }
   if (d.act === 'clear-sent') {
     for (const row of stackRows()) store(`sent:${row.branch}`, undefined)
     sent = []
@@ -2356,6 +2689,8 @@ function flushState() {
 }
 
 document.addEventListener('focusin', event => {
+  const readEl = event.target.closest?.('[data-read-key]')
+  if (readEl && !event.target.closest('[data-act="toggle-read"]')) markReadKey(readEl.dataset.readKey)
   const field = event.target.closest?.('.reply-field input')
   if (!field) return
   if (field.dataset.replyField !== undefined) {
@@ -2366,6 +2701,19 @@ document.addEventListener('focusin', event => {
   }
 })
 
+document.addEventListener('input', event => {
+  const key = event.target.dataset?.replyKey
+  if (key) conversationDrafts.set(key, event.target.value)
+})
+
+document.addEventListener('keydown', event => {
+  const key = event.target.dataset?.replyKey
+  if (!key || event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return
+  event.preventDefault()
+  const button = document.querySelector(`[data-act="conversation-reply"][data-key="${CSS.escape(key)}"]`)
+  if (button && !button.disabled) replyFromConversation(key, button)
+})
+
 document.addEventListener('focusout', () => setTimeout(flushState, 0))
 setInterval(flushState, 1000)
 
@@ -2374,7 +2722,7 @@ async function poll() {
     try {
       const next = await api(`/state?v=${state.version}`)
       $('#connection').className = 'connection'
-      $('#connection').title = 'Live'
+      $('#connection').title = 'Connected to Claude Code: this page updates live'
       if (next.version === state.version) continue
       const restarted = next.version < state.version
       const threadsWere = JSON.stringify(selectedRow()?.pr?.threads)
@@ -2389,7 +2737,7 @@ async function poll() {
       flushState()
     } catch {
       $('#connection').className = 'connection offline'
-      $('#connection').title = 'Disconnected: waiting for Claude Code'
+      $('#connection').title = 'Not connected to Claude Code: comments can’t be sent until the session is back'
       await new Promise(resolve => setTimeout(resolve, 3000))
     }
   }

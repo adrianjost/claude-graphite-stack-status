@@ -9,10 +9,11 @@
   </head>
   <body>
     <aside id="sidebar">
+      <div id="view-tabs" class="segmented view-tabs"></div>
       <section>
         <div class="side-head">
           <span>Code changes <span id="stack-source" class="stack-source"></span></span>
-          <span id="connection" class="connection" title="Live"></span>
+          <span id="connection" class="connection" title="Connected to Claude Code: this page updates live"></span>
         </div>
         <div id="stack"></div>
       </section>
@@ -38,6 +39,7 @@
       </section>
       <div id="notice"></div>
       <div id="diff"></div>
+      <section id="conversations" hidden></section>
       <footer class="page-footer"><img src="badge.svg" width="176" height="62" alt="Better uptime than GitHub" /></footer>
     </main>
     <div id="submit" hidden>

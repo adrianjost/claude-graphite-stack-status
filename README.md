@@ -30,7 +30,7 @@ In Claude Code, run:
 
 Answer `y` to add the marketplace, then pick a scope.
 
-The plugin checks for a new release once a day. When there is one, a banner above the stack offers **Update**, which runs `claude plugin update` for you; restart Claude Code afterwards.
+The plugin checks for a new release once a day. When there is one, a quiet line above the stack offers **Update**, which runs `claude plugin update` for you (restart Claude Code afterwards), or **Later**, which hides it for a day.
 
 ## Requirements
 
@@ -46,6 +46,7 @@ The band appears on its own whenever the session's branch belongs to a Graphite 
 
 - `/stack` shows or hides it
 - **Refresh** and **Hide** in its header reload it or hide it
+- **+** in its header adds a branch or PR the session didn't check out itself: pick a recent branch or type a branch name or PR number. A PR is also linked to the session in the app's PR panel.
 
 ## Review page
 
@@ -61,6 +62,7 @@ The band appears on its own whenever the session's branch belongs to a Graphite 
 - The comment button in a file's header (next to **Viewed**) adds a comment on the whole file, shown at the top of its diff and sent as `` `path` (file) `` without quoted code; GitHub's file-level review threads show there too.
 - Sent comments stay as a history: **Comments** lists pending and sent comments for the whole stack and jumps to each one. On the diff, sent comments show as faded cards, marked *Outdated* once their lines changed; dismiss them one by one, clear the history, or hide them from the diff.
 - Claude answers sent comments with the `review_reply` tool (replies cost only a few tokens): sent comments show an **Addressed** or **Reply** badge, Claude's one-sentence reply when a comment asked a question or wasn't done, and a lazy **Changes** section with the diff of that turn (the worktree is snapshotted with `git stash create` when the comments are sent and when Claude finishes). Answers are kept in the browser, so they survive a restart.
+- The **Diff | Conversations** tabs above the stack switch to **Conversations**, which shows every comment you sent to Claude in this session, across all layers of the stack in one list, with the latest activity first: a reply from Claude or a follow-up moves a conversation up. Each card shows Claude's answers, the code around the comment (or the code as it was, once it changed), whether it's still **Waiting for Claude**, and a field to reply right there. Answers you haven't read yet are marked and counted on the button. An answer counts as read once it has been on screen for a moment, in this view or on the diff, or when you click into it or reply; **Mark as read** / **Mark as unread** set it by hand. Filter by **Unread** or **Waiting for Claude**, and **Open in diff** jumps to the comment's line. Click a card's header (or **Collapse all**) to fold it; a folded conversation stays folded after a reload until Claude answers or you follow up.
 - **Reply** on a sent comment adds a follow-up to the same line, and the comment and its follow-ups show as one conversation card (**Dismiss** clears the whole thread). A follow-up goes to Claude as `[c5] re c2: …`, with no path or quoted code, so it costs only a few tokens; after a restart it includes a short excerpt of the earlier answer instead.
 - The page updates live after commits, restacks and Claude's file edits.
 - GitHub review threads on the PR show inline at their line, with resolved ones collapsed and threads that no longer match the diff listed at the top of the file. **Add to review** puts a thread into the pending review, **Fix now** sends just that thread to Claude (who fixes it and resolves the thread with `gh`), and **Resolve** / **Unresolve** change it on GitHub. Thread details are fetched only while the page is running and only for PRs whose threads changed, and are cached.

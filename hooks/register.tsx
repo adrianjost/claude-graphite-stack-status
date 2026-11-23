@@ -299,8 +299,14 @@ async function newerTrunk($: Engine, cwd: string, trunk: string, branch: string)
   return (await run($, cwd, ['git', 'merge-base', local, upstream])) === local ? remote : trunk
 }
 
+async function addedBranches($: Engine) {
+  const added = ((await $.store.get('addedBranches')) ?? {}) as Record<string, string[]>
+  return added[await $.session.id()] ?? []
+}
+
 async function sessionBranches($: Engine, cwd: string, since: number | null) {
-  if (!since) return []
+  const added = await addedBranches($)
+  if (!since) return added
   const log = (await run($, cwd, ['git', 'reflog', '--date=unix', '--format=%gd %gs', 'HEAD'])) ?? ''
   const names: string[] = []
   for (const line of log.split('\n')) {
@@ -309,7 +315,58 @@ async function sessionBranches($: Engine, cwd: string, since: number | null) {
     if (Number(m[1]) * 1000 < since) break
     names.push(m[3], m[2])
   }
-  return [...new Set(names)]
+  return [...new Set([...names, ...added])]
+}
+
+const PR_REF = /^(?:#?(\d+)|https:\/\/\S+\/pull\/(\d+)\S*)$/
+
+// the + in the band's header: shows a branch or PR in this session's band, and links a PR to the session in the app
+async function addToSession($: Engine) {
+  const cwd = await $.session.cwd()
+  const s = await read($, snapshot)
+  const shown = new Set(s.rows.map(row => row.branch))
+  const recent = ((await run($, cwd, ['git', 'for-each-ref', '--sort=-committerdate', '--count=20', '--format=%(refname:short)', 'refs/heads'])) ?? '')
+    .split('\n')
+    .filter(name => name && !shown.has(name))
+    .slice(0, 4)
+  let answer: string
+  try {
+    answer = (
+      await $.ui.ask('Which branch or PR should this session show? Pick a recent branch, or type a branch name or PR number under Other.', {
+        header: 'Add',
+        options: recent.length >= 2 ? recent : [...recent, 'Cancel'],
+      })
+    ).trim()
+  } catch {
+    return
+  }
+  if (!answer || answer === 'Cancel') return
+  const number = PR_REF.exec(answer)?.slice(1).find(Boolean)
+  let branch = answer
+  let url: string | undefined
+  if (number) {
+    const result = await exec($, cwd, ['gh', 'pr', 'view', number, '--json', 'headRefName,url'])
+    if (result.exitCode !== 0) {
+      $.ui.toast(`Couldn't find PR #${number}.`)
+      return
+    }
+    ;({ headRefName: branch, url } = JSON.parse(result.stdout) as { headRefName: string; url: string })
+  } else {
+    if (branch.startsWith('-') || !(await run($, cwd, ['git', 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]))) {
+      $.ui.toast(`There's no local branch ${branch}.`)
+      return
+    }
+    const found = await exec($, cwd, ['gh', 'pr', 'list', '--head', branch, '--state', 'open', '--json', 'url', '--limit', '1']).catch(() => undefined)
+    url = found?.exitCode === 0 ? (JSON.parse(found.stdout) as { url: string }[])[0]?.url : undefined
+  }
+  if (url) await $.mcp.call('ccd_pr', 'bind_pr', { url }).catch(() => undefined)
+  const id = await $.session.id()
+  const added = ((await $.store.get('addedBranches')) ?? {}) as Record<string, string[]>
+  await $.store.set('addedBranches', { ...added, [id]: [...new Set([...(added[id] ?? []), branch])] })
+  if (!(await run($, cwd, ['git', 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]))) {
+    $.ui.toast(`${branch} isn't checked out on this machine, so the band can't show it yet.`)
+  }
+  requestRefresh($, 'force')
 }
 
 type BoundPr = { number: number; repo: string; state: string; head?: string }
@@ -899,6 +956,19 @@ let review: { port: number; token: string } | undefined
 let reviewStarting: Promise<void> | undefined
 let reviewPushTimer: Timer | undefined
 
+const SESSION_STARTS_KEEP_MS = 30 * 24 * 60 * 60 * 1000
+
+// $.state starts empty after an app restart, so the start of a resumed session is kept in $.store
+async function rememberSessionStart($: Engine) {
+  const id = await $.session.id()
+  const now = Date.now()
+  const starts = ((await $.store.get('sessionStarts')) ?? {}) as Record<string, number>
+  const at = starts[id] ?? (await read($, sessionStart)) ?? now
+  const kept = Object.fromEntries(Object.entries(starts).filter(([, t]) => now - t < SESSION_STARTS_KEEP_MS))
+  await $.store.set('sessionStarts', { ...kept, [id]: at })
+  await update($, sessionStart, () => at)
+}
+
 function portFor(id: string) {
   let h = 0
   for (const ch of id) h = (Math.imul(31, h) + ch.charCodeAt(0)) | 0
@@ -970,8 +1040,10 @@ async function pushReview($: Engine) {
   const cwd = await $.session.cwd()
   const behind = new Set(s.rows.filter(row => row.needsRestack).map(row => row.branch))
   const threads = await threadStore($)
+  const repo = await githubRepo($, cwd)
   const payload = {
     repo: cwd.split('/').pop(),
+    people: repo ? ((await $.store.get(`people:${repo.owner}/${repo.name}`)) ?? []) : [],
     trunk: trunkOf(s.rows),
     untracked: s.untracked,
     source: s.source,
@@ -1067,18 +1139,22 @@ async function loadReviewers($: Engine, number: number, query = ''): Promise<Act
   const author: string | undefined = pr.author?.login
   const strip = (people: (Person | null | undefined)[]) =>
     people.filter((p): p is Person => !!p?.login && p.login !== author)
-  return {
-    ok: true,
-    data: {
-      author,
-      suggestions: strip(pr.suggestedReviewers.filter((s: { isAuthor: boolean }) => !s.isAuthor).map((s: { reviewer: Person }) => s.reviewer)),
-      requested: strip(pr.reviewRequests.nodes.map((n: { requestedReviewer: Person | null }) => n.requestedReviewer)),
-      reviewed: pr.latestReviews.nodes
-        .filter((n: { author: Person | null }) => n.author)
-        .map((n: { state: string; author: Person }) => ({ ...n.author, state: n.state })),
-      users: strip(repository.assignableUsers.nodes),
-    },
+  const data = {
+    author,
+    suggestions: strip(pr.suggestedReviewers.filter((s: { isAuthor: boolean }) => !s.isAuthor).map((s: { reviewer: Person }) => s.reviewer)),
+    requested: strip(pr.reviewRequests.nodes.map((n: { requestedReviewer: Person | null }) => n.requestedReviewer)),
+    reviewed: pr.latestReviews.nodes
+      .filter((n: { author: Person | null }) => n.author)
+      .map((n: { state: string; author: Person }) => ({ ...n.author, state: n.state })),
+    users: strip(repository.assignableUsers.nodes),
   }
+  const key = `people:${repo.owner}/${repo.name}`
+  const known = ((await $.store.get(key)) ?? []) as Person[]
+  const people = [...data.suggestions, ...data.requested, ...data.users, ...known]
+    .filter((p, i, all) => all.findIndex(o => o.login === p.login) === i)
+    .map(({ login, name, avatarUrl }) => ({ login, name, avatarUrl }))
+  await $.store.set(key, people.slice(0, 500))
+  return { ok: true, data }
 }
 
 async function patchPr($: Engine, cwd: string, patch: <T extends PrInfo | null | undefined>(pr: T) => T) {
@@ -1480,6 +1556,7 @@ const RELEASES = 'https://api.github.com/repos/adrianjost/claude-graphite-stack-
 const UPDATE_SCRIPT =
   'c="${CLAUDE_CODE_EXECPATH:-claude}"; "$c" plugin marketplace update adrianjost && "$c" plugin update graphite-stack@adrianjost'
 const UPDATE_CHECK_MS = 6 * 60 * 60_000
+const UPDATE_SNOOZE_MS = 24 * 60 * 60_000
 let updateTimer: Timer | undefined
 
 function isNewer(a: string, b: string) {
@@ -1512,7 +1589,8 @@ async function checkUpdate($: Engine) {
       }
     }
     if (!latest) return
-    const available = isNewer(latest.version, current) && (await $.store.get('dismissedRelease')) !== latest.version
+    const snoozedUntil = ((await $.store.get('updateSnoozedUntil')) ?? 0) as number
+    const available = isNewer(latest.version, current) && (await $.clock.now()) >= snoozedUntil
     await update($, updateInfo, info => (available ? { version: latest.version, url: latest.url, state: info?.version === latest.version ? info.state : 'available' } : null))
     if (available && (await $.store.get('notifiedRelease')) !== latest.version) {
       await $.store.set('notifiedRelease', latest.version)
@@ -1543,10 +1621,11 @@ async function installUpdate($: Engine) {
   await queuePrompt($, `Update the graphite-stack plugin to ${info.version}: run \`${UPDATE_SCRIPT}\` (\`$CLAUDE_CODE_EXECPATH\` is the Claude Code binary of this app, for when \`claude\` isn't on the PATH) and tell me to restart Claude Code afterwards. Don't change anything else.`)
 }
 
-async function dismissUpdate($: Engine) {
-  const info = await read($, updateInfo)
-  if (info) await $.store.set('dismissedRelease', info.version)
+async function snoozeUpdate($: Engine) {
+  await $.store.set('updateSnoozedUntil', (await $.clock.now()) + UPDATE_SNOOZE_MS)
   await update($, updateInfo, () => null)
+  updateTimer?.cancel()
+  updateTimer = $.clock.after(UPDATE_SNOOZE_MS, () => void checkUpdate($))
 }
 
 async function openReview($: Engine, branch?: string) {
@@ -1961,7 +2040,7 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
-    await update($, sessionStart, at => at ?? Date.now())
+    await rememberSessionStart($)
     void checkUpdate($)
     await $.command.register({
       name: 'stack',
@@ -2085,21 +2164,24 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column">
         {newVersion ? (
           <Box key="update" flexDirection="row" alignItems="center" gap={1} marginBottom={1}>
-            <Text color="suggestion">
+            <Text dimColor>
               {newVersion.state === 'installed'
                 ? `graphite-stack ${newVersion.version} is installed. Restart Claude Code to use it.`
-                : `graphite-stack ${newVersion.version} is available.`}
+                : `graphite-stack ${newVersion.version} is available`}
             </Text>
-            {newVersion.url ? <Link key="notes" href={newVersion.url} label="Release notes" /> : null}
+            {newVersion.url ? <Link key="notes" href={newVersion.url} label="What's new" /> : null}
             <Box flexGrow={1} />
+            {newVersion.state === 'installed' ? null : (
+              <Button key="dismiss" plain dimColor label="Later" onPress={() => void snoozeUpdate($)} />
+            )}
             {newVersion.state === 'installed' ? null : (
               <Button
                 key="install"
+                plain
                 label={newVersion.state === 'updating' ? 'Updating…' : 'Update'}
                 onPress={() => void installUpdate($)}
               />
             )}
-            <Button key="dismiss" plain dimColor label="Dismiss" onPress={() => void dismissUpdate($)} />
           </Box>
         ) : null}
         <Box flexDirection="row" alignItems="center" gap={1} marginBottom={1}>
@@ -2119,6 +2201,12 @@ export const register: Register = (on, options) => {
               onPress={() => void stackAction($)}
             />
           )}
+          <Box key="add-wrap" flexShrink={0}>
+            <Button key="add" plain dimColor label="+" onPress={() => void addToSession($)} />
+            <Box position="absolute" top={1} right={0} display="none" hover={{ display: 'flex' }} paddingX={1}>
+              <Text>Show another branch or PR in this session</Text>
+            </Box>
+          </Box>
           <Button key="refresh" plain dimColor label="↻" onPress={() => void refresh($, 'force')} />
           <Button key="hide" plain dimColor label="✕" onPress={() => void update($, isHidden, () => true)} />
         </Box>

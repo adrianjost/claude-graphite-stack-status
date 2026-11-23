@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
-import { alignmentProblems, all, columns, emit, labels, stackRows, text, type Node } from './tree'
+import { alignmentProblems, all, columns, emit, labels, ownPart, stackRows, text, type Node } from './tree'
 import { clone, kids0, rowOf, STACK, start } from './setup'
 import type { World } from './world'
 
@@ -114,10 +114,51 @@ describe('band layout', () => {
     await ui.unmount()
   })
 
+  test('after an app restart, stacks switched to earlier in the session still show', async ($, on) => {
+    const world = clone(STACK)
+    world.branches.push({ name: 'adrian/side-fix', parent: 'main', added: 3, removed: 1 })
+    // switched before the restart: after the session started (1.7e12), before this run of the plugin (1.8e12)
+    world.override = argv =>
+      argv.join(' ') === 'git reflog --date=unix --format=%gd %gs HEAD'
+        ? { exitCode: 0, stdout: 'HEAD@{1750000000} checkout: moving from adrian/side-fix to adrian/parents-gate\n', stderr: '' }
+        : undefined
+    const { draw } = await start($, on, world, { store: { sessionStarts: { 'test-session': 1.7e12 } } })
+    const { ui, tree } = await draw()
+    expect(stackRows(tree).map(r => String((r.children?.[0] as Node).props?.alt ?? ''))).toContain('adrian/side-fix on main')
+    await ui.unmount()
+  })
+
+  test('+ adds a branch the session never checked out, and links its PR', async ($, on) => {
+    const world = clone(STACK)
+    world.branches.push({ name: 'adrian/side-fix', parent: 'main', added: 3, removed: 1 })
+    let asked: { question?: string; options?: { label: string }[] } | undefined
+    on('tool.call', { tool: 'AskUserQuestion' }, (_, e) => {
+      asked = (e as unknown as { questions: typeof asked[] }).questions[0]
+      return { result: { questions: [], answers: { [asked?.question ?? '']: 'adrian/side-fix' } } } as never
+    })
+    world.override = argv => {
+      const cmd = argv.join(' ')
+      if (cmd.startsWith('git for-each-ref')) return { exitCode: 0, stdout: 'adrian/parents-gate\nadrian/side-fix\nadrian/old-idea\n', stderr: '' }
+      if (cmd.startsWith('gh pr list --head adrian/side-fix')) return { exitCode: 0, stdout: '[{"url":"https://github.com/acme/app/pull/31200"}]', stderr: '' }
+      return undefined
+    }
+    const { draw, idle, rec, clock } = await start($, on, world)
+    const { ui } = await draw()
+    await ui.press({ key: 'add' })
+    await clock.advance(3_000)
+    await idle()
+    expect(asked?.options?.map(o => o.label)).toEqual(['adrian/side-fix', 'adrian/old-idea'])
+    expect(rec.mcp.filter(c => c.tool === 'bind_pr').map(c => c.args)).toEqual([{ url: 'https://github.com/acme/app/pull/31200' }])
+    const tree = ownPart((await ui.drawn()) as unknown as Node)
+    expect(stackRows(tree).map(r => String((r.children?.[0] as Node).props?.alt ?? ''))).toContain('adrian/side-fix on main')
+    expect(alignmentProblems(tree)).toEqual([])
+    await ui.unmount()
+  })
+
   test('the header has review, sync, refresh and hide', async ($, on) => {
     const { draw } = await start($, on, STACK)
     const { ui, tree } = await draw()
-    expect(labels(kids0(tree))).toEqual(['Review code', 'Sync with main', '↻', '✕'])
+    expect(labels(kids0(tree))).toEqual(['Review code', 'Sync with main', '+', '↻', '✕'])
     await ui.unmount()
   })
 })
