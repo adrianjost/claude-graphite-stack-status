@@ -38,6 +38,8 @@ export type World = {
   prs?: Record<string, FakePr>
   githubDown?: boolean
   // answers one call differently: a result, or 'missing' for a tool that can't start
+  // what the app's get_status reports as already linked to the session
+  bound?: { number: number; repo: string; state: string; head?: string }[]
   override?: (argv: string[]) => { exitCode: number; stdout: string; stderr: string } | 'missing' | undefined
 }
 
@@ -269,6 +271,8 @@ export function useWorld(on: On, world: () => World, options: { review?: boolean
   })
   on('mcp.call', (_, e) => {
     rec.mcp.push({ server: e.server, tool: e.tool, args: e.args })
+    const bound = world().bound
+    if (e.tool === 'get_status' && bound) return { value: { content: [{ type: 'text', text: JSON.stringify({ otherBoundPrs: bound }) }] } } as never
     return { value: { isError: true, content: [] } }
   })
   on('fs.read', (_, e) => (e.path.endsWith('plugin.json') ? { value: JSON.stringify({ version: '3.0.0' }) } : { deny: 'no files in tests' }))

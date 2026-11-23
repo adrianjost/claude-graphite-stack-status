@@ -148,10 +148,40 @@ describe('band layout', () => {
     await clock.advance(3_000)
     await idle()
     expect(asked?.options?.map(o => o.label)).toEqual(['adrian/side-fix', 'adrian/old-idea'])
-    expect(rec.mcp.filter(c => c.tool === 'bind_pr').map(c => c.args)).toEqual([{ url: 'https://github.com/acme/app/pull/31200' }])
+    expect(rec.mcp.filter(c => c.tool === 'bind_pr').map(c => c.args)).toContainEqual({ url: 'https://github.com/acme/app/pull/31200' })
     const tree = ownPart((await ui.drawn()) as unknown as Node)
     expect(stackRows(tree).map(r => String((r.children?.[0] as Node).props?.alt ?? ''))).toContain('adrian/side-fix on main')
     expect(alignmentProblems(tree)).toEqual([])
+    await ui.unmount()
+  })
+
+  test('every open PR the band shows is linked to the session once', async ($, on) => {
+    const { draw, idle, rec, clock } = await start($, on, STACK)
+    const { ui } = await draw()
+    await clock.advance(3_000)
+    await idle()
+    const bound = rec.mcp.filter(c => c.tool === 'bind_pr').map(c => (c.args as { url: string }).url)
+    expect(bound.length).toBeGreaterThan(0)
+    expect(new Set(bound).size).toBe(bound.length)
+    await ui.unmount()
+  })
+
+  test('merged and closed PRs linked to the session are unlinked, once', async ($, on) => {
+    const world = clone(STACK)
+    world.bound = [
+      { number: 1, repo: 'acme/app', state: 'merged' },
+      { number: 2, repo: 'acme/app', state: 'closed' },
+      { number: 3, repo: 'acme/app', state: 'open', head: 'adrian/parents-gate' },
+    ]
+    const { draw, idle, rec, clock } = await start($, on, world)
+    const { ui } = await draw()
+    await ui.press({ key: 'refresh' })
+    await clock.advance(3_000)
+    await idle()
+    expect(rec.mcp.filter(c => c.tool === 'unbind_pr').map(c => c.args)).toEqual([
+      { url: 'https://github.com/acme/app/pull/1' },
+      { url: 'https://github.com/acme/app/pull/2' },
+    ])
     await ui.unmount()
   })
 

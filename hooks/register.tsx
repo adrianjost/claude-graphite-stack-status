@@ -370,7 +370,20 @@ async function addToSession($: Engine) {
   requestRefresh($, 'force')
 }
 
-type BoundPr = { number: number; repo: string; state: string; head?: string }
+type BoundPr = { number: number; repo: string; state: string; head?: string; url?: string }
+
+// PR urls the app's PR list already has, from get_status and our own binds
+const boundUrls = new Set<string>()
+const unbindAsked = new Set<string>()
+
+// so the app's own Changes list shows every open PR the band shows
+async function bindShown($: Engine, prs: Map<string, PrInfo | undefined>) {
+  for (const pr of prs.values()) {
+    if (!pr || pr.state !== 'OPEN' || boundUrls.has(pr.url)) continue
+    boundUrls.add(pr.url)
+    await $.mcp.call('ccd_pr', 'bind_pr', { url: pr.url }).catch(() => undefined)
+  }
+}
 
 async function sessionPrBranches($: Engine, cwd: string) {
   let status: { pr?: BoundPr; otherBoundPrs?: BoundPr[] }
@@ -385,6 +398,16 @@ async function sessionPrBranches($: Engine, cwd: string) {
   const repo = await githubRepo($, cwd)
   if (!repo) return []
   const slug = `${repo.owner}/${repo.name}`
+  for (const pr of [status.pr, ...(status.otherBoundPrs ?? [])]) {
+    if (!pr) continue
+    const url = pr.url ?? `https://github.com/${pr.repo}/pull/${pr.number}`
+    boundUrls.add(url)
+    // asks once per url: unbind_pr may prompt the person, and a no should stick
+    if ((pr.state === 'merged' || pr.state === 'closed') && !unbindAsked.has(url)) {
+      unbindAsked.add(url)
+      void $.mcp.call('ccd_pr', 'unbind_pr', { url }).catch(() => undefined)
+    }
+  }
   const open = [status.pr, ...(status.otherBoundPrs ?? [])].filter(
     (pr): pr is BoundPr => !!pr && pr.repo.toLowerCase() === slug.toLowerCase() && pr.state === 'open',
   )
@@ -1705,6 +1728,7 @@ async function refresh($: Engine, mode: Mode) {
             },
           )
     const isStale = mode === 'local' ? !!before.isStale : !prs
+    if (prs) void bindShown($, prs)
     if (prs && [...prs].some(([branch, pr]) => JSON.stringify(pr) !== JSON.stringify(previous.get(branch)))) {
       lastChangeAt = Date.now()
     }
@@ -2375,8 +2399,22 @@ export const register: Register = (on, options) => {
               })()}
               {prs.length > 0 && (prefs.showGraphite || prefs.showGithub) && (
                 <Box key={`links-${row.branch}`} flexDirection="row" alignItems="center" gap={1} flexShrink={0} width={prefs.showGraphite && prefs.showGithub ? 6 : 3}>
-                  {pr && prefs.showGraphite && <Link key={`gt-${row.branch}`} href={graphiteUrl(pr)} label="📚" />}
-                  {pr && prefs.showGithub && <Link key={`gh-${row.branch}`} href={pr.url} label="🐙" />}
+                  {pr && prefs.showGraphite && (
+                    <Box key={`gt-${row.branch}`} flexShrink={0}>
+                      <Link href={graphiteUrl(pr)} label="📚" />
+                      <Box position="absolute" top={1} right={0} display="none" hover={{ display: 'flex' }} paddingX={1}>
+                        <Text>View on Graphite</Text>
+                      </Box>
+                    </Box>
+                  )}
+                  {pr && prefs.showGithub && (
+                    <Box key={`gh-${row.branch}`} flexShrink={0}>
+                      <Link href={pr.url} label="🐙" />
+                      <Box position="absolute" top={1} right={0} display="none" hover={{ display: 'flex' }} paddingX={1}>
+                        <Text>View on GitHub</Text>
+                      </Box>
+                    </Box>
+                  )}
                 </Box>
               )}
             </Box>
