@@ -139,13 +139,13 @@ async function diffFor(query) {
 const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 
 async function reflogOf(branch) {
-  const log = await git(['log', '-g', '--format=%H%x1f%ct%x1f%gs', `refs/heads/${branch}`, '--'])
+  const log = await git(['log', '-g', '--date=unix', '--format=%H%x1f%gd%x1f%gs', `refs/heads/${branch}`, '--'])
   return log.stdout
     .split('\n')
     .filter(Boolean)
     .map(line => {
-      const [sha, ct, subject = ''] = line.split('\x1f')
-      return { sha, time: Number(ct), kind: subject.includes('(amend)') ? 'amend' : subject.split(/[:(]/)[0].trim() }
+      const [sha, selector, subject = ''] = line.split('\x1f')
+      return { sha, time: Number(selector.match(/@\{(\d+)\}$/)?.[1] ?? 0), kind: subject.includes('(amend)') ? 'amend' : subject.split(/[:(]/)[0].trim() }
     })
     .reverse()
 }

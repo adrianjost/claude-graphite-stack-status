@@ -2118,12 +2118,37 @@ body.conversations-view #commits-section {
   margin-left: auto;
 }
 
+.version-menu {
+  position: relative;
+}
+
+.version-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  width: 380px;
+  padding: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.2);
+}
+
+.version-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+
 .version-picker {
   display: grid;
   grid-template-columns: 36px 36px 1fr;
-  max-height: 280px;
+  max-height: 360px;
   overflow: auto;
-  margin-bottom: 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 13px;

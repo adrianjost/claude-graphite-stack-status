@@ -138,6 +138,7 @@ function select(branch) {
   descriptionOpen = false
   commitView = null
   versionView = null
+  versionsOpen = false
   comments = stored(`comments:${branch}`, [])
   sent = stored(`sent:${branch}`, [])
   restoreDraft()
@@ -983,11 +984,12 @@ function renderSidebar() {
     .join('')
 }
 
-const KIND_LABELS = { commit: 'new commit', amend: 'amended', rebase: 'restacked' }
+const KIND_LABELS = { commit: 'new commit', amend: 'amended', rebase: 'restacked', branch: 'created' }
 const KIND_TIPS = {
   commit: 'A commit was added to the branch',
   amend: 'The commit was changed in place (git commit --amend)',
   rebase: 'The branch was moved onto a newer parent (restack or rebase)',
+  branch: 'The branch was created',
 }
 const kindLabel = v => KIND_LABELS[v.kind] ?? v.kind
 const versionDate = v => new Date(v.time * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
@@ -1000,9 +1002,57 @@ const versionDiffs = new Map()
 function showVersion(to, from = to - 1) {
   versionView = { from, to }
   commitView = null
+  const latest = current?.versions?.at(-1)?.number
   renderSidebar()
+  renderHeader()
   renderCommit()
   window.scrollTo(0, 0)
+}
+
+let versionsOpen = false
+
+function versionPicker() {
+  if (current?.mode === 'uncommitted') return ''
+  const versions = current?.versions ?? []
+  const latest = versions.at(-1)?.number
+  const view = versionView ?? { from: prefs.compare === 'trunk' ? -1 : 0, to: latest }
+  const to = versions.find(v => v.number === view.to)
+  const from = versions.find(v => v.number === view.from)
+  const trunk = esc(state.trunk ?? 'trunk')
+  const label = versionView ? (from ? `v${from.number} → v${to.number}` : `v${to.number} vs parent`) : view.from < 0 ? `vs ${trunk}` : 'vs parent'
+  const fromRadio = (value, title, disabled) =>
+    `<span class="from"><input type="radio" name="version-from" data-version-pick="from" value="${value}" title="${title}"${view.from === value ? ' checked' : ''}${disabled ? ' disabled' : ''}></span>`
+  return `<span class="version-menu">
+      <button class="btn" data-act="versions" aria-expanded="${versionsOpen}" title="What to compare: the parent branch, ${trunk}, or earlier versions of this branch">${label} ▾</button>
+      ${
+        versionsOpen
+          ? `<div class="version-popover"><div class="version-hint"><span class="muted">Compare from on the left, to on the right</span><button class="btn small" data-act="versions-reset" title="Back to the parent branch and the latest version"${!versionView && prefs.compare !== 'trunk' ? ' disabled' : ''}>Reset</button></div><div class="version-picker">
+      <div class="version-row">${fromRadio(-1, `Compare with ${trunk}`, view.to !== latest)}<span class="to"></span><span class="version-label">${trunk}</span></div>
+      <div class="version-row">${fromRadio(0, 'Compare with the parent branch')}<span class="to"></span><span class="version-label">Parent branch</span></div>
+      ${versions
+        .map(
+          v => `<div class="version-row${v.number === view.to ? ' current' : ''}">
+        ${fromRadio(v.number, `Compare from v${v.number}`, v.number >= view.to)}
+        <span class="to"><input type="radio" name="version-to" data-version-pick="to" value="${v.number}" title="Compare to v${v.number}"${v.number === view.to ? ' checked' : ''}${v.number <= view.from ? ' disabled' : ''}></span>
+        <span class="version-label"><span>v${v.number} <code>${esc(v.sha.slice(0, 7))}</code>${v.number === latest ? ' <span class="badge">Latest</span>' : ''}</span>
+          <span class="muted" title="${esc(KIND_TIPS[v.kind] ?? '')}">${esc(versionDate(v))} · ${esc(kindLabel(v))}</span></span></div>`,
+        )
+        .join('')}
+    </div></div>`
+          : ''
+      }
+    </span>`
+}
+
+function pickVersions(from, to) {
+  const latest = current?.versions?.at(-1)?.number
+  if (from > 0 || (to && to !== latest)) return showVersion(to, Math.max(from, 0))
+  versionView = null
+  const compare = from < 0 ? 'trunk' : 'parent'
+  if (prefs.compare !== compare) return setPref('compare', compare)
+  renderSidebar()
+  renderHeader()
+  renderCommit()
 }
 
 async function renderVersion() {
@@ -1021,19 +1071,7 @@ async function renderVersion() {
   const loaded = versionDiffs.get(key)
   section.innerHTML = `<div class="commit-nav">
       <button class="btn small" data-commit="" title="Back to all changes of the branch">← All changes</button>
-      <span class="muted">Pick the older version on the left, the newer one on the right</span>
-    </div>
-    <div class="version-picker">
-      <div class="version-row"><span class="from"><input type="radio" name="version-from" data-version-pick="from" value="0" title="Compare with the base"${from ? '' : ' checked'}></span><span class="to"></span><span class="version-label">Base</span></div>
-      ${versions
-        .map(
-          v => `<div class="version-row${v.number === to.number ? ' current' : ''}">
-        <span class="from"><input type="radio" name="version-from" data-version-pick="from" value="${v.number}" title="Compare from v${v.number}"${v.number === from?.number ? ' checked' : ''}${v.number >= to.number ? ' disabled' : ''}></span>
-        <span class="to"><input type="radio" name="version-to" data-version-pick="to" value="${v.number}" title="Compare to v${v.number}"${v.number === to.number ? ' checked' : ''}${v.number <= (from?.number ?? 0) ? ' disabled' : ''}></span>
-        <span class="version-label"><span>v${v.number} <code>${esc(v.sha.slice(0, 7))}</code>${v === versions.at(-1) ? ' <span class="badge">Latest</span>' : ''}</span>
-          <span class="muted" title="${esc(KIND_TIPS[v.kind] ?? '')}">${esc(versionDate(v))} · ${esc(kindLabel(v))}</span></span></div>`,
-        )
-        .join('')}
+      <span class="muted">${from ? `Changes from v${from.number} to v${to.number}` : `All changes of v${to.number}`}</span>
     </div>
     ${loaded?.note ? `<div class="version-note muted">${loaded.note}</div>` : ''}
     <div class="changes-body">${loaded?.html ?? '<div class="placeholder">Loading…</div>'}</div>`
@@ -1061,7 +1099,9 @@ const commitDiffs = new Map()
 function showCommit(sha) {
   commitView = sha || null
   versionView = null
+  versionsOpen = false
   renderSidebar()
+  renderHeader()
   renderCommit()
   window.scrollTo(0, 0)
 }
@@ -1401,10 +1441,7 @@ function renderHeader() {
         <button data-format="split" ${pressed(prefs.format === 'split')}>Split</button>
         <button data-format="unified" ${pressed(prefs.format === 'unified')}>Unified</button>
       </span>
-      <span class="segmented"${current?.mode === 'uncommitted' ? ' hidden' : ''}>
-        <button data-compare="parent" ${pressed(prefs.compare === 'parent')}>vs parent</button>
-        <button data-compare="trunk" ${pressed(prefs.compare === 'trunk')}>vs ${esc(state.trunk ?? 'trunk')}</button>
-      </span>
+      ${versionPicker()}
       ${
         current?.isCurrent && current?.dirty && !current?.uncommittedOnly
           ? `<span class="segmented" title="The checked-out branch has uncommitted changes">
@@ -2515,6 +2552,10 @@ document.addEventListener('click', event => {
   if (readEl && !t.closest('[data-act="toggle-read"]')) markReadKey(readEl.dataset.readKey)
   if (t.closest('td.ln[data-line]') || t.closest('a.badge.gh')) return
   if (picker && !t.closest('#picker') && !t.closest('[data-act="reviewers"]')) closePicker()
+  if (versionsOpen && !t.closest('.version-menu')) {
+    versionsOpen = false
+    renderHeader()
+  }
   const person = t.closest('#picker [data-person]')
   if (person && picker?.data) {
     const login = person.dataset.person
@@ -2542,7 +2583,7 @@ document.addEventListener('click', event => {
   const head = t.closest('.file-head')
   const headToggle =
     head && !t.closest('button, label, input, a') && window.getSelection()?.isCollapsed !== false ? head.querySelector('[data-collapse]') : null
-  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-file-comment],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-restore],[data-jump],[data-describe-edit],[data-send-now],[data-remove-at],[data-thread-act],[data-changes],[data-commit],[data-version]')
+  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-file-comment],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-restore],[data-jump],[data-describe-edit],[data-send-now],[data-remove-at],[data-thread-act],[data-changes],[data-commit],[data-version]')
   if (!t.closest('#submit') && !t.closest('[data-act="review"]')) $('#submit').hidden = true
   if (!el) return
   const d = el.dataset
@@ -2556,7 +2597,6 @@ document.addEventListener('click', event => {
   }
   if (d.nav) navigate(Number(d.nav))
   if (d.format) setPref('format', d.format)
-  if (d.compare) setPref('compare', d.compare)
   if (d.uncommitted) setPref('uncommitted', d.uncommitted)
   if (d.show) {
     shownHeavy.add(d.show)
@@ -2661,6 +2701,14 @@ document.addEventListener('click', event => {
     $('#submit').hidden = true
     setView('diff')
     if (target) jumpTo(target)
+  }
+  if (d.act === 'versions-reset') {
+    versionsOpen = false
+    return pickVersions(0, current?.versions?.at(-1)?.number)
+  }
+  if (d.act === 'versions') {
+    versionsOpen = !versionsOpen
+    return renderHeader()
   }
   if (d.act === 'comments') {
     renderCommentViews()
@@ -2797,10 +2845,11 @@ document.addEventListener('mouseup', () => {
 
 document.addEventListener('change', event => {
   const t = event.target
-  if (t.dataset.versionPick && versionView) {
+  if (t.dataset.versionPick) {
     const n = Number(t.value)
-    if (t.dataset.versionPick === 'to') return showVersion(n, Math.min(versionView.from, n - 1))
-    return showVersion(versionView.to, n)
+    const view = versionView ?? { from: prefs.compare === 'trunk' ? -1 : 0, to: current.versions.at(-1)?.number }
+    if (t.dataset.versionPick === 'to') return pickVersions(view.from < 0 && n !== view.to ? 0 : Math.min(view.from, n - 1), n)
+    return pickVersions(n, view.to)
   }
   if (t.dataset.viewed) {
     const file = files.find(f => f.path === t.dataset.viewed)
@@ -2829,6 +2878,10 @@ document.addEventListener('change', event => {
 })
 
 document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && versionsOpen) {
+    versionsOpen = false
+    return renderHeader()
+  }
   if (event.target.closest('#picker input')) {
     if (event.key === 'Escape') closePicker()
     return
