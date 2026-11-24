@@ -132,7 +132,53 @@ async function diffFor(query) {
     })
   const first = commits.at(-1)
   const draft = first?.subject.trim() ? { title: first.subject.trim(), body: first.body } : undefined
-  return { branch: row.branch, parent, base, head, diff, pending: mode === 'all' ? pending : '', commits, isCurrent, dirty, mode, includeWorktree, draft, uncommittedOnly: row.uncommittedOnly }
+  const versions = row.uncommittedOnly || !row.parent ? [] : await versionsOf(row.branch, row.parent)
+  return { branch: row.branch, parent, base, head, diff, versions, pending: mode === 'all' ? pending : '', commits, isCurrent, dirty, mode, includeWorktree, draft, uncommittedOnly: row.uncommittedOnly }
+}
+
+const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
+
+async function reflogOf(branch) {
+  const log = await git(['log', '-g', '--format=%H%x1f%ct%x1f%gs', `refs/heads/${branch}`, '--'])
+  return log.stdout
+    .split('\n')
+    .filter(Boolean)
+    .map(line => {
+      const [sha, ct, subject = ''] = line.split('\x1f')
+      return { sha, time: Number(ct), kind: subject.includes('(amend)') ? 'amend' : subject.split(/[:(]/)[0].trim() }
+    })
+    .reverse()
+}
+
+// shortcut: reads the last 60 reflog entries, each costs a merge-base; raise if longer histories matter
+async function versionsOf(branch, parent) {
+  const parentLog = await reflogOf(parent)
+  const entries = (await reflogOf(branch)).slice(-60).filter((v, i, all) => all[i - 1]?.sha !== v.sha)
+  const versions = await Promise.all(
+    entries.map(async v => {
+      const parentThen = parentLog.findLast(p => p.time <= v.time)?.sha ?? parent
+      const base = (await git(['merge-base', parentThen, v.sha])).stdout.trim() || (await git(['merge-base', parent, v.sha])).stdout.trim()
+      return { ...v, base }
+    }),
+  )
+  return versions.filter(v => v.base && v.base !== v.sha).map((v, i) => ({ ...v, number: i + 1 }))
+}
+
+async function interdiffFor(query) {
+  const [oldBase, old, newBase, next] = ['oldBase', 'old', 'newBase', 'new'].map(key => query.get(key) ?? '')
+  if (![oldBase, old, newBase, next].every(sha => SHA.test(sha))) return { error: 'bad range' }
+  const ws = query.get('ws') === '1' ? [] : ['-w']
+  let from = old
+  let conflict = false
+  if (oldBase !== newBase) {
+    const merged = await git(['merge-tree', '--write-tree', `--merge-base=${oldBase}`, newBase, old])
+    const lines = merged.stdout.trim().split('\n')
+    if (!merged.ok || !SHA.test(lines[0])) return { error: 'unavailable' }
+    from = lines[0]
+    conflict = lines.length > 1
+  }
+  const result = await git(['diff', '--no-color', '--no-ext-diff', '--no-textconv', '-M', ...ws, from, next])
+  return result.ok ? { diff: result.stdout, conflict, rebased: oldBase !== newBase } : { error: 'unavailable' }
 }
 
 async function changesFor(query) {
@@ -189,6 +235,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, state)
     }
     if (url.pathname === '/diff') return send(res, 200, await diffFor(url.searchParams))
+    if (url.pathname === '/interdiff') return send(res, 200, await interdiffFor(url.searchParams))
     if (url.pathname === '/changes') return send(res, 200, await changesFor(url.searchParams))
     if (url.pathname === '/file') return send(res, 200, await fileFor(url.searchParams))
     if (url.pathname === '/action' && req.method === 'POST') {

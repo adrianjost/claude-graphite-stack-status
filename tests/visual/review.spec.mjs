@@ -2,7 +2,7 @@
 // fed the states the plugin tests sent (tests/.out/review/*.json).
 import { expect, test } from '@playwright/test'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
-import { api, plainRepo, stackRepo, startServer, TOKEN } from './fixture.mjs'
+import { api, plainRepo, stackRepo, startServer, TOKEN, versionsRepo } from './fixture.mjs'
 
 const stateOf = name => {
   const file = `tests/.out/review/${name}.json`
@@ -14,6 +14,7 @@ const repos = {}
 test.beforeAll(() => {
   repos.stack = stackRepo()
   repos.plain = plainRepo()
+  repos.versions = versionsRepo()
 })
 test.afterAll(() => {
   for (const dir of Object.values(repos)) rmSync(dir, { recursive: true, force: true })
@@ -94,6 +95,33 @@ test.describe('looks', () => {
     await expect(page.locator('#description')).toHaveScreenshot('description-compare.png')
     await page.getByRole('button', { name: 'Hide commit message' }).click()
     await expect(page.locator('.description-compare')).toHaveCount(0)
+  })
+
+  test('comparing pushed versions of a layer leaves out what a rebase brought in', async ({ page }) => {
+    await open(page, { repo: 'versions', branch: 'adrian/shared-story-intro' })
+    await expect(page.locator('#versions .commit')).toHaveCount(3)
+    await page.locator('#versions [data-version="3"]').click()
+    await expect(page.locator('#commit-view .version-note')).toContainText('rebased')
+    await expect(page.locator('#commit-view .changes-body')).toHaveText('No file changes.')
+    await page.locator('[data-version-pick="from"][value="1"]').check()
+    await expect(page.locator('#commit-view .changes-file')).toHaveText(/src\/intro\.ts/)
+    await expect(page.locator('#commit-view del, #commit-view .changes-body')).not.toContainText('feature9')
+    await shot(page, 'versions')
+    await page.locator('[data-version-pick="from"][value="0"]').check()
+    await expect(page.locator('#commit-view .changes-body')).toContainText('Hi ${name}')
+    await expect(page.locator('#commit-view .changes-file')).toHaveCount(1)
+  })
+
+  test('the sidebar marks the file in the middle of the screen', async ({ page }) => {
+    await open(page)
+    const middle = () => page.evaluate(() => document.elementFromPoint(innerWidth * 0.7, innerHeight / 2)?.closest('#diff .file')?.dataset.file)
+    const marked = () => page.locator('#files .file-item.in-view').getAttribute('data-goto', { timeout: 1000 }).catch(() => undefined)
+    const at = async top => {
+      await page.evaluate(top => window.scrollTo(0, top), top)
+      await expect.poll(async () => (await marked()) === (await middle())).toBe(true)
+      return marked()
+    }
+    expect(await at(0)).not.toBe(await at(100_000))
   })
 
   test('browsing single commits', async ({ page }) => {

@@ -137,6 +137,7 @@ function select(branch) {
   expansions = new Map()
   descriptionOpen = false
   commitView = null
+  versionView = null
   comments = stored(`comments:${branch}`, [])
   sent = stored(`sent:${branch}`, [])
   restoreDraft()
@@ -957,7 +958,7 @@ function renderSidebar() {
     .map(file => {
       const at = file.path.lastIndexOf('/')
       const viewed = isViewed(file)
-      return `<div class="file-item${viewed ? ' viewed' : ''}" data-goto="${esc(file.path)}" title="${esc(file.path)}">
+      return `<div class="file-item${viewed ? ' viewed' : ''}${file.path === fileInView ? ' in-view' : ''}" data-goto="${esc(file.path)}" title="${esc(file.path)}">
         <span class="check">${viewed ? '✓' : pending.has(file.path) ? '<i class="dot" title="Uncommitted changes"></i>' : ''}</span>
         <span class="name"><span>${at < 0 ? '' : `<span class="muted">${esc(file.path.slice(0, at + 1))}</span>`}${esc(file.path.slice(at + 1))}</span></span>
         <span class="stat"><span class="add">+${file.added}</span> <span class="del">−${file.removed}</span></span></div>`
@@ -971,6 +972,85 @@ function renderSidebar() {
         `<div class="commit${c.full === commitView ? ' active' : ''}" data-commit="${esc(c.full ?? '')}" title="${esc(`${c.subject}\n${c.author}, ${c.when}\nClick to see this commit on its own`)}"><code>${esc(c.sha)}</code><span>${esc(c.subject)}</span></div>`,
     )
     .join('')
+  const versions = current?.versions ?? []
+  $('#versions-section').hidden = versions.length < 2
+  $('#versions').innerHTML = versions
+    .toReversed()
+    .map(
+      v =>
+        `<div class="commit${versionView?.to === v.number ? ' active' : ''}" data-version="${v.number}" title="${esc(`${KIND_TIPS[v.kind] ?? v.kind}\n${v.sha.slice(0, 8)}: click to see what changed in this version`)}"><code>v${v.number}</code><span>${esc(versionDate(v))}</span><span class="muted">${esc(kindLabel(v))}</span></div>`,
+    )
+    .join('')
+}
+
+const KIND_LABELS = { commit: 'new commit', amend: 'amended', rebase: 'restacked' }
+const KIND_TIPS = {
+  commit: 'A commit was added to the branch',
+  amend: 'The commit was changed in place (git commit --amend)',
+  rebase: 'The branch was moved onto a newer parent (restack or rebase)',
+}
+const kindLabel = v => KIND_LABELS[v.kind] ?? v.kind
+const versionDate = v => new Date(v.time * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+
+/* versions */
+
+let versionView = null
+const versionDiffs = new Map()
+
+function showVersion(to, from = to - 1) {
+  versionView = { from, to }
+  commitView = null
+  renderSidebar()
+  renderCommit()
+  window.scrollTo(0, 0)
+}
+
+async function renderVersion() {
+  const section = $('#commit-view')
+  const versions = current?.versions ?? []
+  const find = n => versions.find(v => v.number === n)
+  const to = find(versionView.to)
+  const from = find(versionView.from)
+  if (!to) {
+    versionView = null
+    return renderCommit()
+  }
+  section.hidden = false
+  document.body.classList.add('commit-view')
+  const key = `${from?.sha ?? 'base'}:${to.sha}:${prefs.whitespace ? 1 : 0}`
+  const loaded = versionDiffs.get(key)
+  section.innerHTML = `<div class="commit-nav">
+      <button class="btn small" data-commit="" title="Back to all changes of the branch">← All changes</button>
+      <span class="muted">Pick the older version on the left, the newer one on the right</span>
+    </div>
+    <div class="version-picker">
+      <div class="version-row"><span class="from"><input type="radio" name="version-from" data-version-pick="from" value="0" title="Compare with the base"${from ? '' : ' checked'}></span><span class="to"></span><span class="version-label">Base</span></div>
+      ${versions
+        .map(
+          v => `<div class="version-row${v.number === to.number ? ' current' : ''}">
+        <span class="from"><input type="radio" name="version-from" data-version-pick="from" value="${v.number}" title="Compare from v${v.number}"${v.number === from?.number ? ' checked' : ''}${v.number >= to.number ? ' disabled' : ''}></span>
+        <span class="to"><input type="radio" name="version-to" data-version-pick="to" value="${v.number}" title="Compare to v${v.number}"${v.number === to.number ? ' checked' : ''}${v.number <= (from?.number ?? 0) ? ' disabled' : ''}></span>
+        <span class="version-label"><span>v${v.number} <code>${esc(v.sha.slice(0, 7))}</code>${v === versions.at(-1) ? ' <span class="badge">Latest</span>' : ''}</span>
+          <span class="muted" title="${esc(KIND_TIPS[v.kind] ?? '')}">${esc(versionDate(v))} · ${esc(kindLabel(v))}</span></span></div>`,
+        )
+        .join('')}
+    </div>
+    ${loaded?.note ? `<div class="version-note muted">${loaded.note}</div>` : ''}
+    <div class="changes-body">${loaded?.html ?? '<div class="placeholder">Loading…</div>'}</div>`
+  if (loaded) return
+  const ws = prefs.whitespace ? '1' : '0'
+  const result = await api(
+    from ? `/interdiff?${new URLSearchParams({ oldBase: from.base, old: from.sha, newBase: to.base, new: to.sha, ws })}` : `/changes?${new URLSearchParams({ from: to.base, to: to.sha, ws })}`,
+  ).catch(() => ({ error: 'unreachable' }))
+  versionDiffs.set(key, {
+    html: result.error ? '<div class="placeholder">These versions are not available any more.</div>' : changesHtml(result.diff ?? ''),
+    note: result.conflict
+      ? `v${from.number} doesn't apply cleanly to the newer base, so conflicting files show conflict markers.`
+      : result.rebased
+        ? `The branch was rebased in between; changes that came from the parent branch are left out.`
+        : '',
+  })
+  if (versionView?.to === to.number && versionView.from === (from?.number ?? 0)) renderVersion()
 }
 
 /* single commit */
@@ -980,12 +1060,14 @@ const commitDiffs = new Map()
 
 function showCommit(sha) {
   commitView = sha || null
+  versionView = null
   renderSidebar()
   renderCommit()
   window.scrollTo(0, 0)
 }
 
 async function renderCommit() {
+  if (versionView) return renderVersion()
   const section = $('#commit-view')
   const commits = current?.commits ?? []
   const at = commits.findIndex(c => c.full === commitView)
@@ -1377,6 +1459,7 @@ function renderAll() {
   renderCommit()
   watchUnread()
   window.scrollTo(0, scroll)
+  markFileInView()
 }
 
 function rerenderFile(path) {
@@ -1934,6 +2017,25 @@ function setPref(key, value) {
   loadDiff(true)
 }
 
+let fileInView
+function markFileInView() {
+  const mid = window.innerHeight / 2
+  const card = [...document.querySelectorAll('#diff .file')].find(c => {
+    const r = c.getBoundingClientRect()
+    return r.top <= mid && r.bottom > mid
+  })
+  const path = card?.dataset.file
+  if (path === fileInView) return
+  fileInView = path
+  for (const item of document.querySelectorAll('#files .file-item')) {
+    const on = item.dataset.goto === path
+    item.classList.toggle('in-view', on)
+    if (on) item.scrollIntoView({ block: 'nearest' })
+  }
+}
+let inViewFrame
+window.addEventListener('scroll', () => (inViewFrame ??= requestAnimationFrame(() => ((inViewFrame = undefined), markFileInView()))), { passive: true })
+
 function scrollToFile(path) {
   const card = cardOf(path)
   if (card) window.scrollTo({ top: card.getBoundingClientRect().top + window.scrollY - $('#header').offsetHeight - 8 })
@@ -2440,13 +2542,14 @@ document.addEventListener('click', event => {
   const head = t.closest('.file-head')
   const headToggle =
     head && !t.closest('button, label, input, a') && window.getSelection()?.isCollapsed !== false ? head.querySelector('[data-collapse]') : null
-  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-file-comment],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-restore],[data-jump],[data-describe-edit],[data-send-now],[data-remove-at],[data-thread-act],[data-changes],[data-commit]')
+  const el = headToggle ?? t.closest('[data-uncommitted],[data-branch],[data-nav],[data-format],[data-compare],[data-act],[data-show],[data-expand],[data-collapse],[data-copy],[data-file-comment],[data-goto],[data-edit],[data-remove],[data-dismiss],[data-restore],[data-jump],[data-describe-edit],[data-send-now],[data-remove-at],[data-thread-act],[data-changes],[data-commit],[data-version]')
   if (!t.closest('#submit') && !t.closest('[data-act="review"]')) $('#submit').hidden = true
   if (!el) return
   const d = el.dataset
   if (d.threadAct) return threadAct(el)
   if (d.changes) return toggleChanges(d.changes)
   if (d.commit !== undefined) return showCommit(d.commit)
+  if (d.version) return showVersion(Number(d.version))
   if (d.branch !== undefined && !el.classList.contains('trunk')) {
     setView('diff')
     select(d.branch)
@@ -2694,6 +2797,11 @@ document.addEventListener('mouseup', () => {
 
 document.addEventListener('change', event => {
   const t = event.target
+  if (t.dataset.versionPick && versionView) {
+    const n = Number(t.value)
+    if (t.dataset.versionPick === 'to') return showVersion(n, Math.min(versionView.from, n - 1))
+    return showVersion(versionView.to, n)
+  }
   if (t.dataset.viewed) {
     const file = files.find(f => f.path === t.dataset.viewed)
     if (!file) return

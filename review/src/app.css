@@ -309,6 +309,25 @@ a:hover {
   background: var(--selected);
 }
 
+.file-item {
+  position: relative;
+}
+
+.file-item.in-view {
+  background: var(--selected);
+}
+
+.file-item.in-view::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
 .file-item .name {
   flex: 1;
   min-width: 0;
@@ -2084,13 +2103,94 @@ body.conversations-view #commits-section {
   display: none;
 }
 
-.commit[data-commit] {
+.commit[data-commit],
+.commit[data-version] {
   cursor: pointer;
   border-radius: 6px;
 }
 
-.commit[data-commit]:hover {
+.commit[data-commit]:hover,
+.commit[data-version]:hover {
   background: var(--canvas);
+}
+
+.commit .muted {
+  margin-left: auto;
+}
+
+.version-picker {
+  display: grid;
+  grid-template-columns: 36px 36px 1fr;
+  max-height: 280px;
+  overflow: auto;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.version-row {
+  display: contents;
+}
+
+.version-row > span {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-muted);
+}
+
+.version-row:last-child > span {
+  border-bottom: 0;
+}
+
+.version-row .from,
+.version-row .to {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.version-row .from {
+  background: var(--del-line);
+}
+
+.version-row .to {
+  background: var(--add-line);
+}
+
+.version-row input {
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.version-row input:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.version-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+}
+
+.version-label .muted {
+  font-size: 12px;
+}
+
+.version-label .badge {
+  margin-left: 6px;
+}
+
+.version-row.current .version-label {
+  font-weight: 600;
+}
+
+.version-note {
+  font-size: 12px;
+  margin-bottom: 8px;
 }
 
 .commit.active {
@@ -2100,6 +2200,11 @@ body.conversations-view #commits-section {
 
 #commit-view {
   margin-top: 16px;
+}
+
+#commit-view .changes-body {
+  max-height: none;
+  overflow: visible;
 }
 
 .commit-nav {

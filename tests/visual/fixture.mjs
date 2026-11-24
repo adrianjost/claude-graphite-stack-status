@@ -85,6 +85,24 @@ export function stackRepo() {
   return r.dir
 }
 
+// main ← shared-story-intro, amended once and then rebased onto a newer main
+export function versionsRepo() {
+  const r = repo('versions')
+  base(r)
+  r.git('checkout', '-q', '-b', 'adrian/shared-story-intro')
+  r.write('src/intro.ts', 'export const intro = (name: string) => `Hello ${name}`\n')
+  r.git('add', '-A')
+  r.git('commit', '-q', '-m', '✨ Ask the shared story intro')
+  r.write('src/intro.ts', 'export const intro = (name: string) => `Hi ${name}`\n')
+  r.git('commit', '-q', '-a', '--amend', '--no-edit')
+  r.git('checkout', '-q', 'main')
+  r.write('src/feature.ts', lines(12, 'feature').replace('feature9 = 9', 'feature9 = 99'))
+  r.git('commit', '-q', '-am', '🐛 fix feature nine')
+  r.git('checkout', '-q', 'adrian/shared-story-intro')
+  r.git('rebase', '-q', 'main')
+  return r.dir
+}
+
 // main ← quick-fix, a branch without Graphite or a GitHub stack
 export function plainRepo() {
   const r = repo('plain')
