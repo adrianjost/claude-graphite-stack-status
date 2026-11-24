@@ -112,7 +112,7 @@ test.describe('looks', () => {
     await page.keyboard.press('Escape')
     await expect(page.locator('.version-popover')).toHaveCount(0)
     await page.locator('[data-act="versions"]').click()
-    await page.locator('[data-version-pick="to"][value="2"]').check()
+    await page.locator('label.to:has([value="2"])').click({ position: { x: 4, y: 4 } })
     await page.locator('[data-version-pick="from"][value="0"]').check()
     await expect(page.locator('[data-act="versions"]')).toHaveText(/v2 vs parent/)
     await expect(page.locator('#commit-view .changes-body')).toContainText('Hi ${name}')

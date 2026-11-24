@@ -2158,7 +2158,7 @@ body.conversations-view #commits-section {
   display: contents;
 }
 
-.version-row > span {
+.version-row > * {
   padding: 6px 0;
   border-bottom: 1px solid var(--border-muted);
 }
@@ -2169,6 +2169,7 @@ body.conversations-view #commits-section {
 
 .version-row .from,
 .version-row .to {
+  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2186,6 +2187,10 @@ body.conversations-view #commits-section {
   margin: 0;
   accent-color: var(--accent);
   cursor: pointer;
+}
+
+.version-row label:has(input:disabled) {
+  cursor: default;
 }
 
 .version-row input:disabled {

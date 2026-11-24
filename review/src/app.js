@@ -1021,7 +1021,7 @@ function versionPicker() {
   const trunk = esc(state.trunk ?? 'trunk')
   const label = versionView ? (from ? `v${from.number} → v${to.number}` : `v${to.number} vs parent`) : view.from < 0 ? `vs ${trunk}` : 'vs parent'
   const fromRadio = (value, title, disabled) =>
-    `<span class="from"><input type="radio" name="version-from" data-version-pick="from" value="${value}" title="${title}"${view.from === value ? ' checked' : ''}${disabled ? ' disabled' : ''}></span>`
+    `<label class="from"><input type="radio" name="version-from" data-version-pick="from" value="${value}" title="${title}"${view.from === value ? ' checked' : ''}${disabled ? ' disabled' : ''}></label>`
   return `<span class="version-menu">
       <button class="btn" data-act="versions" aria-expanded="${versionsOpen}" title="What to compare: the parent branch, ${trunk}, or earlier versions of this branch">${label} ▾</button>
       ${
@@ -1033,7 +1033,7 @@ function versionPicker() {
         .map(
           v => `<div class="version-row${v.number === view.to ? ' current' : ''}">
         ${fromRadio(v.number, `Compare from v${v.number}`, v.number >= view.to)}
-        <span class="to"><input type="radio" name="version-to" data-version-pick="to" value="${v.number}" title="Compare to v${v.number}"${v.number === view.to ? ' checked' : ''}${v.number <= view.from ? ' disabled' : ''}></span>
+        <label class="to"><input type="radio" name="version-to" data-version-pick="to" value="${v.number}" title="Compare to v${v.number}"${v.number === view.to ? ' checked' : ''}${v.number <= view.from ? ' disabled' : ''}></label>
         <span class="version-label"><span>v${v.number} <code>${esc(v.sha.slice(0, 7))}</code>${v.number === latest ? ' <span class="badge">Latest</span>' : ''}</span>
           <span class="muted" title="${esc(KIND_TIPS[v.kind] ?? '')}">${esc(versionDate(v))} · ${esc(kindLabel(v))}</span></span></div>`,
         )
