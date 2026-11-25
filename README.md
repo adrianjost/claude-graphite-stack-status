@@ -6,7 +6,7 @@ A Claude Code plugin that shows the [Graphite](https://graphite.dev) stack of th
 
 ## What it shows
 
-One row per branch, drawn as the same tree `gt log` draws, from the branch above trunk up to every descendant, side branches included. Other Graphite stacks this session checked out or opened PRs for get their own lane off trunk.
+One row per branch, drawn as the same tree `gt log` draws, from the branch above trunk up to every descendant, side branches included. Other Graphite stacks whose PRs are linked to this session in the app's PR panel get their own lane off trunk; unlinking a PR there removes its lane.
 
 | | |
 |---|---|
@@ -46,7 +46,7 @@ The band appears on its own whenever the session's branch belongs to a Graphite 
 
 - `/stack` shows or hides it
 - **Refresh** and **Hide** in its header reload it or hide it
-- **+** in its header adds a branch or PR the session didn't check out itself: pick a recent branch or type a branch name or PR number. A PR is also linked to the session in the app's PR panel.
+- **+** in its header adds another branch or PR: pick a recent branch or type a branch name or PR number. A branch with a PR is linked to the session in the app's PR panel, so unlinking it there removes it again.
 
 ## Review page
 
@@ -74,7 +74,7 @@ The band appears on its own whenever the session's branch belongs to a Graphite 
 
 Each session serves its own page on `127.0.0.1` with a fixed port, so several review pages can be open at once and an open tab reconnects after a restart. Requests need a random token in the page's URL, and other sites can't call it; see [SECURITY.md](SECURITY.md).
 
-Without Graphite tracking, the band and review page still work for a first iteration: on a branch `gt` doesn't track they show it against trunk (with its PR once pushed), next to the session's other open PRs from the desktop app's PR panel and every other branch checked out in this session, and on a trunk with uncommitted changes they show just those changes. Trunk comes from Graphite's repo config, then `origin/HEAD`, then `main` or `master`. **Sync with main** is hidden there, and **Open draft PR** asks Claude to commit, push and open the PR with `gh pr create --draft`.
+Without Graphite tracking, the band and review page still work for a first iteration: on a branch `gt` doesn't track they show it against trunk (with its PR once pushed), next to the session's other open PRs from the desktop app's PR panel and branches added with **+**, and on a trunk with uncommitted changes they show just those changes. Trunk comes from Graphite's repo config, then `origin/HEAD`, then `main` or `master`. **Sync with main** is hidden there, and **Open draft PR** asks Claude to commit, push and open the PR with `gh pr create --draft`.
 
 ## Keeping the stack current
 

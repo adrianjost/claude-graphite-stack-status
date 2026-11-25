@@ -18,7 +18,6 @@ const working = atom({ plugin: 'graphite-stack', key: 'working' } as const, null
 const reviewUrl = atom({ plugin: 'graphite-stack', key: 'reviewUrl' } as const, null as string | null)
 const waitingPrompts = atom({ plugin: 'graphite-stack', key: 'waitingPrompts' } as const, [] as WaitingPrompt[])
 const reviewReplies = atom({ plugin: 'graphite-stack', key: 'reviewReplies' } as const, {} as Record<string, ReviewReply>)
-const sessionStart = atom({ plugin: 'graphite-stack', key: 'sessionStart' } as const, null as number | null)
 const updateInfo = atom({ plugin: 'graphite-stack', key: 'updateInfo' } as const, null as UpdateInfo | null)
 const DEFAULT_SETTINGS: Settings = { excludeTests: false, showGraphite: true, showGithub: true, githubHost: 'github.com', graphiteUrl: 'https://app.graphite.com' }
 let prefs = DEFAULT_SETTINGS
@@ -305,20 +304,6 @@ async function addedBranches($: Engine) {
   return added[await $.session.id()] ?? []
 }
 
-async function sessionBranches($: Engine, cwd: string, since: number | null) {
-  const added = await addedBranches($)
-  if (!since) return added
-  const log = (await run($, cwd, ['git', 'reflog', '--date=unix', '--format=%gd %gs', 'HEAD'])) ?? ''
-  const names: string[] = []
-  for (const line of log.split('\n')) {
-    const m = /^HEAD@\{(\d+)\} checkout: moving from (\S+) to (\S+)$/.exec(line)
-    if (!m?.[2] || !m[3]) continue
-    if (Number(m[1]) * 1000 < since) break
-    names.push(m[3], m[2])
-  }
-  return [...new Set([...names, ...added])]
-}
-
 const PR_REF = /^(?:#?(\d+)|https:\/\/\S+\/pull\/(\d+)\S*)$/
 
 // the + in the band's header: shows a branch or PR in this session's band, and links a PR to the session in the app
@@ -360,10 +345,13 @@ async function addToSession($: Engine) {
     const found = await exec($, cwd, ['gh', 'pr', 'list', '--head', branch, '--state', 'open', '--json', 'url', '--limit', '1']).catch(() => undefined)
     url = found?.exitCode === 0 ? (JSON.parse(found.stdout) as { url: string }[])[0]?.url : undefined
   }
+  // with a PR, the app's binding is what keeps it in the band, so unbinding it removes it again
   if (url) await $.mcp.call('ccd_pr', 'bind_pr', { url }).catch(() => undefined)
-  const id = await $.session.id()
-  const added = ((await $.store.get('addedBranches')) ?? {}) as Record<string, string[]>
-  await $.store.set('addedBranches', { ...added, [id]: [...new Set([...(added[id] ?? []), branch])] })
+  else {
+    const id = await $.session.id()
+    const added = ((await $.store.get('addedBranches')) ?? {}) as Record<string, string[]>
+    await $.store.set('addedBranches', { ...added, [id]: [...new Set([...(added[id] ?? []), branch])] })
+  }
   if (!(await run($, cwd, ['git', 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]))) {
     $.ui.toast(`${branch} isn't checked out on this machine, so the band can't show it yet.`)
   }
@@ -435,8 +423,8 @@ async function sessionPrBranches($: Engine, cwd: string) {
 async function untrackedRows($: Engine, cwd: string, branch: string): Promise<Built | undefined> {
   const trunk = await detectTrunk($, cwd)
   if (!trunk) return undefined
-  const [switched, withPr] = await Promise.all([sessionBranches($, cwd, await read($, sessionStart)), sessionPrBranches($, cwd)])
-  const candidates = [branch, ...withPr, ...switched].filter(
+  const [added, withPr] = await Promise.all([addedBranches($), sessionPrBranches($, cwd)])
+  const candidates = [branch, ...withPr, ...added].filter(
     (name, i, all) => name !== trunk && all.indexOf(name) === i,
   )
   const dirty = !!(await run($, cwd, ['git', 'status', '--porcelain']))
@@ -830,8 +818,8 @@ async function buildRows($: Engine, cwd: string, branch: string): Promise<Built 
   const root = rootOf(branch)
   const detached = parentOf(root) ? undefined : root
   // other stacks this session worked on, each drawn as its own lane off trunk
-  const [switched, withPr] = await Promise.all([sessionBranches($, cwd, await read($, sessionStart)), sessionPrBranches($, cwd)])
-  const roots = [root, ...[...withPr, ...switched].filter(name => name !== trunk && meta.has(name)).map(rootOf)].filter(
+  const [added, withPr] = await Promise.all([addedBranches($), sessionPrBranches($, cwd)])
+  const roots = [root, ...[...withPr, ...added].filter(name => name !== trunk && meta.has(name)).map(rootOf)].filter(
     (name, i, all) => all.indexOf(name) === i,
   )
 
@@ -981,18 +969,6 @@ let review: { port: number; token: string } | undefined
 let reviewStarting: Promise<void> | undefined
 let reviewPushTimer: Timer | undefined
 
-const SESSION_STARTS_KEEP_MS = 30 * 24 * 60 * 60 * 1000
-
-// $.state starts empty after an app restart, so the start of a resumed session is kept in $.store
-async function rememberSessionStart($: Engine) {
-  const id = await $.session.id()
-  const now = Date.now()
-  const starts = ((await $.store.get('sessionStarts')) ?? {}) as Record<string, number>
-  const at = starts[id] ?? (await read($, sessionStart)) ?? now
-  const kept = Object.fromEntries(Object.entries(starts).filter(([, t]) => now - t < SESSION_STARTS_KEEP_MS))
-  await $.store.set('sessionStarts', { ...kept, [id]: at })
-  await update($, sessionStart, () => at)
-}
 
 function portFor(id: string) {
   let h = 0
@@ -2067,7 +2043,6 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
-    await rememberSessionStart($)
     void checkUpdate($)
     await $.command.register({
       name: 'stack',
@@ -2156,6 +2131,12 @@ export const register: Register = (on, options) => {
     return ran
   })
 
+  on('tool.call', { tool: /^mcp__ccd_pr__(un)?bind_pr$/ }, async ($, e, next) => {
+    const ran = await next(e)
+    requestRefresh($, 'local')
+    return ran
+  })
+
   on('tool.call', { tool: /^(Edit|Write|MultiEdit|NotebookEdit)$/ }, async ($, e, next) => {
     const ran = await next(e)
     schedulePushReview($)
@@ -2238,16 +2219,14 @@ export const register: Register = (on, options) => {
           <Button key="hide" plain dimColor label="✕" onPress={() => void update($, isHidden, () => true)} />
         </Box>
         {s.issue && (
-          <Box flexDirection="row" alignItems="center" gap={1} marginBottom={1}>
+          <Box flexDirection="row" alignItems="flex-start" gap={1} marginBottom={1}>
             <Text color="warning">⚠</Text>
-            <Box flexShrink={1} minWidth={0}>
-              <Text wrap="truncate-end">{s.issue.message}</Text>
+            <Box flexGrow={1} flexShrink={1} minWidth={0}>
+              <Text wrap="wrap">
+                {s.issue.message}
+                {s.issue.detail && <Text dimColor>{`  ${s.issue.detail}`}</Text>}
+              </Text>
             </Box>
-            {s.issue.detail && (
-              <Box flexShrink={2} minWidth={0}>
-                <Text dimColor wrap="truncate-end">{s.issue.detail}</Text>
-              </Box>
-            )}
             {s.issue.canFix !== false && (
               <Box flexShrink={0}>
                 <Button

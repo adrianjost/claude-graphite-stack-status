@@ -92,14 +92,11 @@ describe('band layout', () => {
     await ui.unmount()
   })
 
-  test('another Graphite stack this session switched to gets its own lane off main', async ($, on) => {
+  test('another Graphite stack whose PR is linked to this session gets its own lane off main', async ($, on) => {
     const world = clone(STACK)
     world.branches.push({ name: 'adrian/side-fix', parent: 'main', added: 3, removed: 1 })
     world.prs!['adrian/side-fix'] = { number: 31200, title: '🐛 Fix the side thing' }
-    world.override = argv =>
-      argv.join(' ') === 'git reflog --date=unix --format=%gd %gs HEAD'
-        ? { exitCode: 0, stdout: 'HEAD@{1800000100} checkout: moving from adrian/side-fix to adrian/parents-gate\n', stderr: '' }
-        : undefined
+    world.bound = [{ number: 31200, repo: 'acme/app', state: 'open', head: 'adrian/side-fix' }]
     const { draw } = await start($, on, world)
     const { ui, tree } = await draw()
     emit('band', 'graphite-two-stacks', tree)
@@ -114,23 +111,27 @@ describe('band layout', () => {
     await ui.unmount()
   })
 
-  test('after an app restart, stacks switched to earlier in the session still show', async ($, on) => {
+  test('a stack whose PR gets unlinked from the session leaves the band', async ($, on) => {
     const world = clone(STACK)
     world.branches.push({ name: 'adrian/side-fix', parent: 'main', added: 3, removed: 1 })
-    // switched before the restart: after the session started (1.7e12), before this run of the plugin (1.8e12)
-    world.override = argv =>
-      argv.join(' ') === 'git reflog --date=unix --format=%gd %gs HEAD'
-        ? { exitCode: 0, stdout: 'HEAD@{1750000000} checkout: moving from adrian/side-fix to adrian/parents-gate\n', stderr: '' }
-        : undefined
-    const { draw } = await start($, on, world, { store: { sessionStarts: { 'test-session': 1.7e12 } } })
+    world.prs!['adrian/side-fix'] = { number: 31200, title: '🐛 Fix the side thing' }
+    world.bound = [{ number: 31200, repo: 'acme/app', state: 'open', head: 'adrian/side-fix' }]
+    const { draw, idle, clock } = await start($, on, world)
+    const alts = (tree: Node) => stackRows(tree).map(r => String((r.children?.[0] as Node).props?.alt ?? ''))
     const { ui, tree } = await draw()
-    expect(stackRows(tree).map(r => String((r.children?.[0] as Node).props?.alt ?? ''))).toContain('adrian/side-fix on main')
+    expect(alts(tree)).toContain('adrian/side-fix on main')
+    world.bound = []
+    await ui.press({ key: 'refresh' })
+    await clock.advance(3_000)
+    await idle()
+    expect(alts((await draw()).tree)).not.toContain('adrian/side-fix on main')
     await ui.unmount()
   })
 
   test('+ adds a branch the session never checked out, and links its PR', async ($, on) => {
     const world = clone(STACK)
     world.branches.push({ name: 'adrian/side-fix', parent: 'main', added: 3, removed: 1 })
+    world.prs!['adrian/side-fix'] = { number: 31200, title: '🐛 Fix the side thing' }
     let asked: { question?: string; options?: { label: string }[] } | undefined
     on('tool.call', { tool: 'AskUserQuestion' }, (_, e) => {
       asked = (e as unknown as { questions: typeof asked[] }).questions[0]

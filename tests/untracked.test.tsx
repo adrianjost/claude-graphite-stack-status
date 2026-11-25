@@ -28,10 +28,7 @@ describe('branches without a stack', () => {
         { name: 'adrian/other-fix', parent: 'main', added: 2, removed: 0 },
       ],
     }
-    world.override = argv =>
-      argv.join(' ') === 'git reflog --date=unix --format=%gd %gs HEAD'
-        ? { exitCode: 0, stdout: 'HEAD@{1800000100} checkout: moving from adrian/other-fix to adrian/quick-fix\n', stderr: '' }
-        : undefined
+    world.bound = [{ number: 31201, repo: 'acme/app', state: 'open', head: 'adrian/other-fix' }]
     const { draw } = await start($, on, world)
     const { ui, tree } = await draw()
     emit('band', 'untracked-several', tree)

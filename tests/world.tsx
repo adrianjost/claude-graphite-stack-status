@@ -179,7 +179,6 @@ export function answer(world: World, argv: readonly string[]) {
   if (args === 'remote get-url origin') return ok('git@github.com:acme/app.git\n')
   if (args === 'symbolic-ref --short refs/remotes/origin/HEAD') return ok(`origin/${trunk}\n`)
   if (args.startsWith('status --porcelain')) return ok(world.dirty ? ' M src/feature.ts\n' : '')
-  if (args === 'reflog --date=unix --format=%gd %gs HEAD') return ok()
   if (args === 'ls-files --others --exclude-standard -z') return ok()
   if (rest[0] === 'rev-parse' && rest[1] === '--verify') {
     const ref = (rest[3] ?? '').replace(/^refs\/heads\//, '').replace(/\^\{commit\}$/, '')
@@ -269,9 +268,19 @@ export function useWorld(on: On, world: () => World, options: { review?: boolean
     }
     return { deny: `unexpected review call ${url.pathname}` }
   })
+  const binds = new Map<number, NonNullable<World['bound']>[number] | undefined>()
   on('mcp.call', (_, e) => {
     rec.mcp.push({ server: e.server, tool: e.tool, args: e.args })
-    const bound = world().bound
+    const w = world()
+    // binds made during the test, kept apart from the shared fixtures
+    const number = Number(/\/pull\/(\d+)/.exec(String((e.args as { url?: string })?.url))?.[1])
+    if (e.tool === 'bind_pr' && number) {
+      const head = Object.entries(w.prs ?? {}).find(([, pr]) => pr.number === number)?.[0]
+      binds.set(number, { number, repo: 'acme/app', state: 'open', head })
+    }
+    if (e.tool === 'unbind_pr' && number) binds.set(number, undefined)
+    const listed = [...(w.bound ?? []).filter(pr => !binds.has(pr.number)), ...[...binds.values()].filter(pr => !!pr)]
+    const bound = w.bound || binds.size ? listed : undefined
     if (e.tool === 'get_status' && bound) return { value: { content: [{ type: 'text', text: JSON.stringify({ otherBoundPrs: bound }) }] } } as never
     return { value: { isError: true, content: [] } }
   })
