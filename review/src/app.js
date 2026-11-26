@@ -3008,6 +3008,42 @@ async function poll() {
   }
 }
 
+const SIDEBAR_DEFAULT = 300
+const sidebarWidth = width => {
+  const clamped = Math.round(Math.min(Math.max(width, 200), Math.max(200, Math.min(700, innerWidth - 400))))
+  document.body.style.setProperty('--sidebar-width', `${clamped}px`)
+  $('#sidebar-resize').setAttribute('aria-valuenow', clamped)
+  return clamped
+}
+sidebarWidth(stored('sidebarWidth', SIDEBAR_DEFAULT))
+const saveSidebarWidth = width => store('sidebarWidth', width === SIDEBAR_DEFAULT ? undefined : width)
+$('#sidebar-resize').addEventListener('pointerdown', event => {
+  const handle = event.currentTarget
+  handle.setPointerCapture(event.pointerId)
+  handle.classList.add('dragging')
+  document.body.classList.add('resizing')
+  let width = $('#sidebar').getBoundingClientRect().width
+  const move = e => (width = sidebarWidth(e.clientX))
+  handle.addEventListener('pointermove', move)
+  handle.addEventListener(
+    'lostpointercapture',
+    () => {
+      handle.removeEventListener('pointermove', move)
+      handle.classList.remove('dragging')
+      document.body.classList.remove('resizing')
+      saveSidebarWidth(width)
+    },
+    { once: true },
+  )
+})
+$('#sidebar-resize').addEventListener('dblclick', () => saveSidebarWidth(sidebarWidth(SIDEBAR_DEFAULT)))
+$('#sidebar-resize').addEventListener('keydown', event => {
+  const step = { ArrowLeft: -16, ArrowRight: 16 }[event.key]
+  if (!step) return
+  event.preventDefault()
+  saveSidebarWidth(sidebarWidth($('#sidebar').getBoundingClientRect().width + step))
+})
+
 comments = stored(`comments:${selected}`, [])
 sent = stored(`sent:${selected}`, [])
 restoreDraft()
