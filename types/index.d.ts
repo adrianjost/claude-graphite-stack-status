@@ -59,7 +59,7 @@ export type StackRow = {
   diff?: { added: number; removed: number }
 }
 
-export type Settings = { excludeTests: boolean; showGraphite: boolean; showGithub: boolean; githubHost: string; graphiteUrl: string }
+export type Settings = { excludeTests: boolean; showGraphite: boolean; showGithub: boolean; githubHost: string; graphiteUrl: string; ignoreChecks: string[] }
 
 export type StackSnapshot = {
   branch: string

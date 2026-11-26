@@ -42,6 +42,12 @@
       "description": "Your GitHub Enterprise host, for example github.mycorp.com. Leave empty for github.com.",
       "default": ""
     },
+    "ignoreChecks": {
+      "type": "string",
+      "title": "Ignore CI checks",
+      "description": "Comma-separated check names the band leaves out of its CI status, for example a review policy that fails until a PR is approved. Matches a check's name, or \"workflow / name\", ignoring case.",
+      "default": ""
+    },
     "graphiteUrl": {
       "type": "string",
       "title": "Graphite URL",

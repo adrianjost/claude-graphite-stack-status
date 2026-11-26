@@ -85,6 +85,8 @@ Without Graphite tracking, the band and review page still work for a first itera
 
 Pick where clicking a PR title opens it with the **Links** picker in the band's header: GitHub (default) or Graphite. The choice is remembered across sessions.
 
+**Ignore CI checks** in the plugin's options takes comma-separated check names the band leaves out of its CI status, for example `Review policy` for a check that fails until someone approves the PR. A name matches a check's name or `workflow / name`, ignoring case.
+
 ## Troubleshooting
 
 When something keeps the band from working, it shows a ⚠ line with the reason, for example a missing `gh` or `sqlite3`, a `gt` version too old to read, `gh` not signed in, or GitHub's rate limit. Click its button to have Claude fix the problem, or to look into it and suggest a fix when the cause isn't clear.

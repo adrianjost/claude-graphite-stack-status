@@ -19,7 +19,7 @@ const reviewUrl = atom({ plugin: 'graphite-stack', key: 'reviewUrl' } as const, 
 const waitingPrompts = atom({ plugin: 'graphite-stack', key: 'waitingPrompts' } as const, [] as WaitingPrompt[])
 const reviewReplies = atom({ plugin: 'graphite-stack', key: 'reviewReplies' } as const, {} as Record<string, ReviewReply>)
 const updateInfo = atom({ plugin: 'graphite-stack', key: 'updateInfo' } as const, null as UpdateInfo | null)
-const DEFAULT_SETTINGS: Settings = { excludeTests: false, showGraphite: true, showGithub: true, githubHost: 'github.com', graphiteUrl: 'https://app.graphite.com' }
+const DEFAULT_SETTINGS: Settings = { excludeTests: false, showGraphite: true, showGithub: true, githubHost: 'github.com', graphiteUrl: 'https://app.graphite.com', ignoreChecks: [] }
 let prefs = DEFAULT_SETTINGS
 const TEST_FILE = /(^|\/)(__tests__|__mocks__|tests?|specs?|e2e)\/|\.(test|spec|e2e)\.[^/]+$|_test\.[^/]+$|(^|\/)test_[^/]+\.py$/
 const counts = (path: string) => !prefs.excludeTests || !TEST_FILE.test(path.replace(/\{[^}]*=> ([^}]*)\}/, '$1').replace(/^.* => /, ''))
@@ -505,7 +505,12 @@ function toPrInfo(pr: GqlPr): PrInfo {
   }))
   const ciCounts = { pass: 0, fail: 0, pending: 0 }
   const failing: PrInfo['failing'] = []
+  const ignored = (check: GhCheck) =>
+    [check.name ?? check.context, check.workflowName && `${check.workflowName} / ${check.name}`].some(
+      name => !!name && prefs.ignoreChecks.includes(name.toLowerCase()),
+    )
   for (const check of latestChecks(checks)) {
+    if (ignored(check)) continue
     const state = checkState(check)
     ciCounts[state === 'none' ? 'pass' : state]++
     if (state === 'fail') {
@@ -2038,6 +2043,7 @@ export const register: Register = (on, options) => {
     showGithub: options.showGithub !== false,
     githubHost: host || DEFAULT_SETTINGS.githubHost,
     graphiteUrl: /^https?:\/\/\S+$/.test(graphite) ? graphite : DEFAULT_SETTINGS.graphiteUrl,
+    ignoreChecks: text(options.ignoreChecks).split(',').map(name => name.trim().toLowerCase()).filter(Boolean),
   }
 
 

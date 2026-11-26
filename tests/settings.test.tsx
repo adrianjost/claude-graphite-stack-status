@@ -37,6 +37,14 @@ describe('settings', () => {
     for (const call of graphql) expect(call.slice(0, 4)).toEqual(['gh', 'api', '--hostname', 'github.acme.test'])
   })
 
+  test('ignoreChecks leaves the named checks out of the CI status', { options: { ignoreChecks: 'Lint, ci / BUILD' } }, async ($, on) => {
+    const { draw } = await start($, on, clone(STACK))
+    const { ui, tree } = await draw()
+    expect(text(tree)).not.toContain('CI failing')
+    expect(text(kids0(tree))).not.toContain('failing')
+    await ui.unmount()
+  })
+
   test('showGraphite and showGithub off remove the icon links', { options: { showGraphite: false, showGithub: false } }, async ($, on) => {
     const { draw } = await start($, on, clone(STACK))
     const { ui, tree } = await draw()
