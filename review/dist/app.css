@@ -402,7 +402,7 @@ a:hover {
   color: var(--text);
 }
 
-.segmented button[aria-pressed='true'] {
+.segmented button[aria-checked='true'] {
   color: var(--text);
   background: var(--bg);
   box-shadow: 0 0 0 1px var(--border);

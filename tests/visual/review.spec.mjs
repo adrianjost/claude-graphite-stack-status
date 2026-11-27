@@ -437,6 +437,22 @@ test.describe('reviewing', () => {
     await expect(page.locator('#files-progress')).toHaveText(`1 / ${total} viewed`)
   })
 
+  test('segmented controls are radio groups the arrow keys switch', async ({ page }) => {
+    await open(page)
+    const split = page.getByRole('radio', { name: 'Split' })
+    await expect(split).toHaveAttribute('aria-checked', 'true')
+    await split.focus()
+    await page.keyboard.press('ArrowRight')
+    const unified = page.getByRole('radio', { name: 'Unified' })
+    await expect(unified).toHaveAttribute('aria-checked', 'true')
+    await expect(unified).toBeFocused()
+    await page.keyboard.press('ArrowRight')
+    await expect(page.getByRole('radio', { name: 'Split' })).toBeFocused()
+    await page.getByRole('radio', { name: 'Diff' }).focus()
+    await page.keyboard.press('ArrowDown')
+    await expect(page.getByRole('radio', { name: /^Conversations/ })).toHaveAttribute('aria-checked', 'true')
+  })
+
   test('dragging the sidebar edge resizes it and the width survives a reload', async ({ page }) => {
     await open(page)
     const handle = await page.locator('#sidebar-resize').boundingBox()

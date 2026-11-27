@@ -1412,7 +1412,6 @@ function renderHeader() {
   const totals = files.reduce((sum, f) => ({ added: sum.added + f.added, removed: sum.removed + f.removed }), { added: 0, removed: 0 })
   const order = stackRows()
   const index = order.findIndex(r => r.branch === selected)
-  const pressed = on => `aria-pressed="${on}"`
   const allClosed = files.length > 0 && files.every(isCollapsed)
   $('#header').innerHTML = `
     ${
@@ -1437,17 +1436,17 @@ function renderHeader() {
       ${current?.mode === 'uncommitted' ? '<span class="badge pending">Uncommitted changes only</span>' : ''}
     </div>
     <div class="toolbar">
-      <span class="segmented">
-        <button data-format="split" ${pressed(prefs.format === 'split')}>Split</button>
-        <button data-format="unified" ${pressed(prefs.format === 'unified')}>Unified</button>
+      <span class="segmented" role="radiogroup" aria-label="Diff layout">
+        <button data-format="split" ${radio(prefs.format === 'split')}>Split</button>
+        <button data-format="unified" ${radio(prefs.format === 'unified')}>Unified</button>
       </span>
       ${versionPicker()}
       ${
         current?.isCurrent && current?.dirty && !current?.uncommittedOnly
-          ? `<span class="segmented" title="The checked-out branch has uncommitted changes">
-              <button data-uncommitted="all" ${pressed(current.mode === 'all')}>All changes</button>
-              <button data-uncommitted="committed" ${pressed(current.mode === 'committed')}>Committed</button>
-              <button data-uncommitted="only" ${pressed(current.mode === 'uncommitted')}>Uncommitted</button>
+          ? `<span class="segmented" role="radiogroup" aria-label="Uncommitted changes" title="The checked-out branch has uncommitted changes">
+              <button data-uncommitted="all" ${radio(current.mode === 'all')}>All changes</button>
+              <button data-uncommitted="committed" ${radio(current.mode === 'committed')}>Committed</button>
+              <button data-uncommitted="only" ${radio(current.mode === 'uncommitted')}>Uncommitted</button>
             </span>`
           : ''
       }
@@ -2140,7 +2139,7 @@ const unreadCount = () => conversationChains().filter(chain => chain.some(isUnre
 
 function renderViewTabs() {
   const unread = unreadCount()
-  $('#view-tabs').innerHTML = `<button data-act="view" data-view="diff" aria-pressed="${view === 'diff'}">Diff</button><button data-act="view" data-view="conversations" aria-pressed="${view === 'conversations'}" title="Every comment you sent to Claude on this stack, with its answers">Conversations${unread ? ` <span class="count unread">${unread}</span>` : ''}</button>`
+  $('#view-tabs').innerHTML = `<button data-act="view" data-view="diff" ${radio(view === 'diff')}>Diff</button><button data-act="view" data-view="conversations" ${radio(view === 'conversations')} title="Every comment you sent to Claude on this stack, with its answers">Conversations${unread ? ` <span class="count unread">${unread}</span>` : ''}</button>`
 }
 
 function setView(next) {
@@ -2296,12 +2295,12 @@ function renderConversations() {
   const shownChains = unreadFirst ? [...filtered.filter(c => c.some(isUnread)), ...filtered.filter(c => !c.some(isUnread))] : filtered
   const divideAt = unreadFirst ? shownChains.findIndex(c => !c.some(isUnread)) : -1
   const filter = (key, label) =>
-    `<button data-act="conversation-filter" data-filter="${key}" aria-pressed="${conversationFilter === key}">${label} <span class="count">${counts[key]}</span></button>`
+    `<button data-act="conversation-filter" data-filter="${key}" ${radio(conversationFilter === key)}>${label} <span class="count">${counts[key]}</span></button>`
   const focused = document.activeElement?.dataset?.replyKey
   const caret = focused ? document.activeElement.selectionStart : 0
   $('#conversations').innerHTML = `<div class="conversations-bar">
       <strong>Conversations</strong>
-      <span class="segmented">${filter('all', 'All')}${filter('unread', 'Unread')}${filter('waiting', 'Waiting for Claude')}</span>
+      <span class="segmented" role="radiogroup" aria-label="Show conversations">${filter('all', 'All')}${filter('unread', 'Unread')}${filter('waiting', 'Waiting for Claude')}</span>
       <span class="spacer"></span>
       ${counts.unread ? '<button class="btn invisible" data-act="read-all">Mark all as read</button>' : ''}
       ${shownChains.length ? `<button class="btn" data-act="fold-all" data-fold="${shownChains.every(c => isFolded(c, chainKey(c))) ? 0 : 1}">${shownChains.every(c => isFolded(c, chainKey(c))) ? 'Expand all' : 'Collapse all'}</button>` : ''}
@@ -3007,6 +3006,23 @@ async function poll() {
     }
   }
 }
+
+// segmented controls are radio groups: only the checked button is tabbable, arrow keys move and select
+function radio(on) {
+  return `role="radio" aria-checked="${on}" tabindex="${on ? 0 : -1}"`
+}
+document.addEventListener('keydown', event => {
+  const button = event.target.closest?.('[role=radiogroup] > [role=radio]')
+  const step = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[event.key]
+  if (!button || !step) return
+  event.preventDefault()
+  const group = [...button.parentElement.querySelectorAll(':scope > [role=radio]')]
+  const next = group[(group.indexOf(button) + step + group.length) % group.length]
+  // the click re-renders the group, so focus the new copy of the button afterwards
+  const key = [...next.attributes].filter(a => a.name.startsWith('data-')).map(a => `[${a.name}="${CSS.escape(a.value)}"]`).join('')
+  next.click()
+  requestAnimationFrame(() => document.querySelector(`[role=radiogroup] > [role=radio]${key}`)?.focus())
+})
 
 const SIDEBAR_DEFAULT = 300
 const sidebarWidth = width => {
