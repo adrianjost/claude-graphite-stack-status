@@ -468,3 +468,11 @@ test.describe('reviewing', () => {
     await expect.poll(width).toBe(300)
   })
 })
+
+test('a lost connection shows a big alert', async ({ page }) => {
+  await open(page)
+  await page.route('**/state?*', route => route.abort())
+  await server.stop()
+  await expect(page.locator('#offline-alert')).toBeVisible({ timeout: 10_000 })
+  await expect(page).toHaveScreenshot('offline-alert.png')
+})

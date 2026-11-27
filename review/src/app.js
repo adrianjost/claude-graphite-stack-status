@@ -2987,6 +2987,7 @@ async function poll() {
       const next = await api(`/state?v=${state.version}`)
       $('#connection').className = 'connection'
       $('#connection').title = 'Connected to Claude Code: this page updates live'
+      $('#offline-alert').hidden = true
       if (next.version === state.version) continue
       const restarted = next.version < state.version
       const threadsWere = JSON.stringify(selectedRow()?.pr?.threads)
@@ -3002,6 +3003,7 @@ async function poll() {
     } catch {
       $('#connection').className = 'connection offline'
       $('#connection').title = 'Not connected to Claude Code: comments can’t be sent until the session is back'
+      $('#offline-alert').hidden = false
       await new Promise(resolve => setTimeout(resolve, 3000))
     }
   }
