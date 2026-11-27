@@ -156,14 +156,13 @@ describe('band layout', () => {
     await ui.unmount()
   })
 
-  test('every open PR the band shows is linked to the session once', async ($, on) => {
+  // gt restack checks out other stacks for a moment; binding what the band showed then kept them for good
+  test('the band never links the PRs it only shows', async ($, on) => {
     const { draw, idle, rec, clock } = await start($, on, STACK)
     const { ui } = await draw()
     await clock.advance(3_000)
     await idle()
-    const bound = rec.mcp.filter(c => c.tool === 'bind_pr').map(c => (c.args as { url: string }).url)
-    expect(bound.length).toBeGreaterThan(0)
-    expect(new Set(bound).size).toBe(bound.length)
+    expect(rec.mcp.filter(c => c.tool === 'bind_pr')).toEqual([])
     await ui.unmount()
   })
 

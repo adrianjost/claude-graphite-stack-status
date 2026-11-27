@@ -360,18 +360,7 @@ async function addToSession($: Engine) {
 
 type BoundPr = { number: number; repo: string; state: string; head?: string; url?: string }
 
-// PR urls the app's PR list already has, from get_status and our own binds
-const boundUrls = new Set<string>()
 const unbindAsked = new Set<string>()
-
-// so the app's own Changes list shows every open PR the band shows
-async function bindShown($: Engine, prs: Map<string, PrInfo | undefined>) {
-  for (const pr of prs.values()) {
-    if (!pr || pr.state !== 'OPEN' || boundUrls.has(pr.url)) continue
-    boundUrls.add(pr.url)
-    await $.mcp.call('ccd_pr', 'bind_pr', { url: pr.url }).catch(() => undefined)
-  }
-}
 
 async function sessionPrBranches($: Engine, cwd: string) {
   let status: { pr?: BoundPr; otherBoundPrs?: BoundPr[] }
@@ -389,7 +378,6 @@ async function sessionPrBranches($: Engine, cwd: string) {
   for (const pr of [status.pr, ...(status.otherBoundPrs ?? [])]) {
     if (!pr) continue
     const url = pr.url ?? `https://github.com/${pr.repo}/pull/${pr.number}`
-    boundUrls.add(url)
     // asks once per url: unbind_pr may prompt the person, and a no should stick
     if ((pr.state === 'merged' || pr.state === 'closed') && !unbindAsked.has(url)) {
       unbindAsked.add(url)
@@ -1709,7 +1697,6 @@ async function refresh($: Engine, mode: Mode) {
             },
           )
     const isStale = mode === 'local' ? !!before.isStale : !prs
-    if (prs) void bindShown($, prs)
     if (prs && [...prs].some(([branch, pr]) => JSON.stringify(pr) !== JSON.stringify(previous.get(branch)))) {
       lastChangeAt = Date.now()
     }
