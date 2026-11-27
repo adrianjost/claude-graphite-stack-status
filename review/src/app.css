@@ -1351,7 +1351,7 @@ main {
 
 .markdown img,
 .markdown video {
-  max-width: 100%;
+  max-width: min(100%, 720px);
   height: auto;
 }
 
